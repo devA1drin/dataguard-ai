@@ -2,427 +2,351 @@
 
 **An Intelligent Customer Data Protection and Corporate Accountability System Using Machine Learning**
 
-A working MVP (student / portfolio project) of a privacy-and-accountability platform for a
-fictional Philippine retailer, **"Acme Retail PH"**. Customers manage their consents and data-rights
-requests; the company's Data Protection Officer (DPO), security team and executives get anomaly
-alerts with explanations, incident management with corrective actions, risk trends, model
-metrics and a tamper-evident audit log.
+## What is this?
 
-> **Honesty notes**
-> - **All data is synthetic.** It comes from `data/generate.py`. No real people or companies are involved.
-> - The policy documents in `data/policies/` are **fictional samples**. They mention the Philippine Data
->   Privacy Act of 2012 (RA 10173) only in general terms. They are **not legal advice** and do not quote real clauses.
-> - Model metrics below were measured **on that synthetic data**. They show the pipeline works end to end.
->   They do **not** predict how the models would do on a real company's logs.
-> - This is an MVP. See [Limitations](#limitations) before reusing any part in production.
+DataGuard AI is a working prototype of a privacy tool for a **made-up Philippine online store, "Acme Retail PH"**.
+Customers use it to control how the store uses their personal data. The store's privacy and security
+staff use it to spot employees who may be misusing customer data, manage incidents, and prove what
+happened with a tamper-evident log. Machine learning (ML) helps by flagging suspicious activity,
+explaining why, sorting incident reports, and answering customers' privacy questions from the store's
+policy documents. It is a capstone / portfolio project, and **every person and record in it is fake**.
 
-**Live demo:** https://dataguard-ai-roan.vercel.app. This is the full stack running on Vercel: Next.js, Express, FastAPI ML and Neon Postgres, with synthetic data. Sign in with any [demo account](#demo-accounts), for example `dpo@dataguard.demo` / `DemoPass123!`.
+**Try it live:** https://dataguard-ai-roan.vercel.app
 
-| DPO dashboard | Alert with SHAP explanation |
-|---|---|
-| ![Dashboard](docs/screenshots/dashboard.png) | ![Alert SHAP](docs/screenshots/alert-shap.png) |
-| **Model performance (synthetic data)** | **Customer privacy assistant** |
-| ![Model performance](docs/screenshots/model-performance.png) | ![Privacy assistant](docs/screenshots/privacy-assistant.png) |
-
----
-
-## Contents
-- [Features](#features)
-- [Architecture](#architecture)
-- [Quick start (Docker)](#quick-start-docker)
-- [Running without Docker](#running-without-docker)
-- [Live deployment on Vercel](#live-deployment-on-vercel)
-- [Demo mode / Vercel](#demo-mode--vercel)
-- [Demo accounts](#demo-accounts)
-- [Feature → code map](#feature--code-map)
-- [ML methodology & evaluation](#ml-methodology--evaluation)
-- [Security & privacy design](#security--privacy-design)
-- [Ethical considerations](#ethical-considerations)
-- [Limitations](#limitations)
-- [Future work](#future-work)
-
-## Features
-
-**Customer portal**
-- View, grant and withdraw consent for each processing purpose, with a full consent history
-- Submit access, correction and deletion requests and track them (reference number, status, target date, response)
-- Privacy assistant: retrieval over the company policy docs. It answers with quoted passages and
-  citations, and says *"not covered by policy"* when retrieval confidence is low
-
-**Admin / DPO console**
-- Dashboard KPIs, an anomaly trend chart, incidents by category and the latest flagged alerts
-- Access-log anomaly alerts (Isolation Forest) with **per-event SHAP explanations**. Every alert
-  starts as *flagged for review*, and only a person can mark it *confirmed* or *false positive*
-- Incidents: an ML category suggestion (two models compared), assignment, status, severity, a
-  human-confirmed category, notes and trackable corrective actions, plus a timeline
-- Data-rights request handling. The response is shown to the customer; the internal note is not
-- Risk analytics: daily counts, a 7-day rolling mean and a linear trend projected 14 days ahead with a band
-- Model performance: precision, recall, F1, false-positive rate, ROC-AUC, confusion matrices, a
-  comparison of the two classifiers and recall per anomaly pattern
-- Audit-log viewer with **hash-chain verification**
-- User and role management with a permission matrix
-- Real-time alerts: the backend scores new access events as they arrive and pushes new alerts to
-  the console over Server-Sent Events
-
-## Architecture
-
-```mermaid
-flowchart LR
-  subgraph Browser
-    FE["Next.js frontend<br/>(customer portal + admin console)"]
-  end
-  subgraph Backend["Express API (TypeScript)"]
-    AUTH["JWT auth + bcrypt<br/>RBAC guards"]
-    ROUTES["consents · requests · incidents<br/>alerts · access-logs · users · audit"]
-    AUDIT["Hash-chained audit writer"]
-    JOB["Scoring job + simulator<br/>(every 10 s)"]
-    SSE["SSE /alerts/stream"]
-  end
-  subgraph ML["FastAPI ML service (Python)"]
-    IF["/anomaly/score + /anomaly/explain<br/>Isolation Forest + SHAP"]
-    CLF["/incidents/classify<br/>TF-IDF + LogReg / RandomForest"]
-    RISK["/risk/forecast<br/>rolling mean + OLS trend"]
-    RAG["/assistant/ask<br/>MiniLM + FAISS (TF-IDF fallback)"]
-    MET["/metrics"]
-  end
-  DB[("PostgreSQL<br/>users · customers · consents · consent_history<br/>data_requests · access_logs · alerts · incidents<br/>incident_actions · audit_logs · model_predictions")]
-  TRAIN["training/run_all.py<br/>generate → train → evaluate → metrics.json"]
-
-  FE -- "REST + Bearer JWT" --> AUTH --> ROUTES
-  FE -- "EventSource" --> SSE
-  ROUTES --> AUDIT --> DB
-  ROUTES --> DB
-  JOB -- "unscored logs" --> DB
-  JOB -- "score / explain / classify" --> ML
-  ROUTES -- "proxy: forecast, metrics, assistant, classify" --> ML
-  TRAIN -. "models/*.joblib, metrics.json" .-> ML
-```
-
-The browser never calls the ML service directly. Every ML call goes through the backend, which
-checks authentication and role first.
-
-```
-dataguard-ai/
-├── data/            generate.py (synthetic data) · policies/*.md (sample policy docs)
-├── db/              init.sql (schema, append-only trigger) · build_seed.py → seed.sql
-├── ml-service/      app/ (FastAPI) · training/ (train + evaluate) · models/ (generated)
-├── backend/         src/ (Express + TS: routes, lib/audit.ts, lib/mask.ts, jobs/scorer.ts)
-├── frontend/        src/app (pages) · src/lib (api, demo store) · src/demo/fixtures.json
-├── docker-compose.yml · .env.example
-```
-
-## Quick start (Docker)
-
-```bash
-cp .env.example .env        # change JWT_SECRET
-docker compose up --build
-```
-
-| Service | URL |
-|---|---|
-| Frontend | http://localhost:3000 |
-| Backend API | http://localhost:4000/api/health |
-| ML service (Swagger UI) | http://localhost:8000/docs |
-| PostgreSQL | localhost:5432 (dataguard / dataguard) |
-
-What happens when the stack starts:
-- The ML image generates the synthetic data, then trains and evaluates the models during `docker build` (about 10 s). It also tries to cache the MiniLM embedding model.
-- Postgres runs `db/init.sql` and then `db/seed.sql`. Seed timestamps are relative to load time, so the data always looks recent.
-- The backend scores the roughly 1,900 seeded access events through the ML service, which creates about 100 alerts. It also classifies the seeded incidents. A simulator then adds a synthetic access event every 20 s (set `SIMULATE_ACCESS_LOGS=false` to turn it off).
-
-To reset everything, run `docker compose down -v`.
-
-## Running without Docker
-
-You need Python 3.11+, Node 20+ and PostgreSQL 14+.
-
-```bash
-# 1) ML: data + training + API
-cd ml-service
-python -m venv .venv && . .venv/bin/activate
-pip install --index-url https://download.pytorch.org/whl/cpu torch   # optional, smaller CPU build
-pip install -r requirements.txt -r requirements-extras.txt   # extras: uvicorn, MiniLM+FAISS (optional)
-python -m training.run_all          # runs data/generate.py, trains, writes models/metrics.json
-uvicorn app.main:app --port 8000
-
-# 2) Database
-createuser dataguard -P   # password: dataguard
-createdb -O dataguard dataguard
-python ../db/build_seed.py          # optional: regenerate seed.sql from data/generated
-psql -U dataguard -h localhost dataguard -f ../db/init.sql -f ../db/seed.sql
-
-# 3) Backend
-cd ../backend && npm install && npm run build && npm start      # :4000
-
-# 4) Frontend
-cd ../frontend && npm install && npm run build && npm start      # :3000
-```
-
-Useful commands:
-- `npm run verify-audit` (in backend/) recomputes the whole audit hash chain from the command line.
-- `RAG_BACKEND=tfidf` forces the TF-IDF retriever, which needs no model download.
-
-## Live deployment on Vercel
-
-**Live app:** https://dataguard-ai-roan.vercel.app. This is the full stack, not demo mode. Sign in with the demo accounts below.
-
-The root `vercel.json` deploys three [Vercel Services](https://vercel.com/docs/services) together as one atomic deployment:
-
-| Service | Root | Runtime | Public route |
-|---|---|---|---|
-| `frontend` | `frontend/` | Next.js | `/*` |
-| `backend` | `backend/` | Express as a Vercel Function (entrypoint `src/app.ts`) | `/api/*` |
-| `ml` | `ml-service/` | FastAPI as a Python Function (entrypoint `app/main.py`) | **none.** It is private and reachable only through a service binding (`ML_SERVICE_URL`) from the backend. |
-
-The database is **Neon Postgres** (Vercel Marketplace, free plan). The integration provides `DATABASE_URL`, the pooled connection with SSL. Schema and seed are the same `db/init.sql` and `db/seed.sql` used by Docker.
-
-How the serverless deployment differs from `docker compose`:
-- **Scoring.** There are no in-process timers. Events are scored immediately on `POST /api/access-logs/ingest` and on `POST /api/access-logs/simulate` (the *Simulate 5 events* button on *Access logs*). Anything left unscored is handled by `GET /api/cron/score`, which a daily Vercel Cron calls with `Authorization: Bearer $CRON_SECRET`. Security and admin users can also call it with their JWT.
-- **Live alerts.** The browser polls `GET /api/alerts/latest` every 15 s (`NEXT_PUBLIC_ALERT_TRANSPORT=poll`) instead of using SSE. SSE remains the default for Docker.
-- **ML service.** It is stateless. It loads the trained `models/*.joblib` artifacts that are bundled with the deployment, so train them before deploying (`python -m training.run_all`). The assistant uses TF-IDF retrieval (`RAG_BACKEND=tfidf`) over the policy documents copied to `ml-service/policies/`. Off-topic questions are refused. `sentence-transformers`, `faiss`, `torch` and `uvicorn` live in `requirements-extras.txt`, which only the Docker image installs. This keeps the Python function at about 250 MB.
-- **Configuration.** `JWT_SECRET` and `CRON_SECRET` are random secrets stored as Vercel environment variables. The backend refuses to start on Vercel without `JWT_SECRET`. Other settings: `NEXT_PUBLIC_API_URL=/` (same origin), `NEXT_PUBLIC_DEMO_MODE=false`, `SIMULATE_ACCESS_LOGS=false`.
-
-Deploy from the repository root with an authenticated Vercel CLI:
-
-```bash
-vercel link              # once
-vercel deploy --prod
-```
-
-Verify a deployment end-to-end, including logins, scoring, SHAP, review, assistant, audit chain and RBAC, with 1440px screenshots:
-
-```bash
-python scripts/verify_live.py https://dataguard-ai-roan.vercel.app screenshots/live
-```
-
-Plan notes: the Hobby plan limits crons to once per day and functions to 300 s. Neon's free plan auto-suspends when idle, so the first request after a pause takes about 1 s longer.
-
-## Demo mode / Vercel
-
-The frontend can run on its own using bundled fixtures. These are real outputs exported from the
-running stack: anomaly scores with SHAP values, incident classifications, the risk forecast, model
-metrics and pre-computed assistant answers with citations.
-
-```bash
-cd frontend
-NEXT_PUBLIC_DEMO_MODE=true npm run build && npm start
-```
-
-How demo mode behaves:
-- **Login:** a role picker replaces the login form.
-- **Banner:** a yellow *"Demo mode, sample data"* banner is always visible.
-- **Changes:** consent toggles, requests, reviews, incident edits and user changes are saved only in your browser (localStorage). They are still written to a client-side audit chain using the same SHA-256 algorithm, so *Verify hash chain* works.
-- **Assistant:** it cannot run the embedding model in the browser. It matches your question to the closest pre-computed one and refuses when nothing is close enough.
-
-**Static demo on Vercel:** create a project with Root Directory `frontend` and set `NEXT_PUBLIC_DEMO_MODE=true`. Nothing else is needed. The live deployment described above does **not** use demo mode.
-
-## Demo accounts
-
-> **Demo only.** These credentials are public, so never reuse them. Change `JWT_SECRET` and remove these accounts in any real deployment.
-
-| Role | Email | Password |
+| Sign in as | Email | Password |
 |---|---|---|
 | Customer | `customer@dataguard.demo` | `DemoPass123!` |
-| Customer (2nd) | `customer2@dataguard.demo` | `DemoPass123!` |
-| Data Protection Officer | `dpo@dataguard.demo` | `DemoPass123!` |
+| Data Protection Officer (DPO) | `dpo@dataguard.demo` | `DemoPass123!` |
 | Security analyst | `security@dataguard.demo` | `DemoPass123!` |
 | System admin | `admin@dataguard.demo` | `DemoPass123!` |
 | Executive (read-only) | `exec@dataguard.demo` | `DemoPass123!` |
 
-## Feature → code map
+There is also a second customer, `customer2@dataguard.demo`, with the same password. These logins are
+public and for demo only, so never reuse this password anywhere.
 
-| Feature | Where |
+| DPO dashboard | Why an alert was raised (SHAP) | Privacy assistant |
+|---|---|---|
+| ![DPO dashboard with alert counts, trend chart and latest alerts](docs/screenshots/dashboard.png) | ![Alert detail with a SHAP bar chart of the reasons](docs/screenshots/alert-shap.png) | ![Customer privacy assistant answering with citations](docs/screenshots/privacy-assistant.png) |
+
+> Looking for API endpoints, the database schema or the full ML methodology? See
+> **[docs/TECHNICAL.md](docs/TECHNICAL.md)**.
+
+## Contents
+
+- [The problem it solves](#the-problem-it-solves)
+- [How it works](#how-it-works)
+- [Features](#features)
+- [The machine learning, explained simply](#the-machine-learning-explained-simply)
+- [Why synthetic data?](#why-synthetic-data)
+- [Run it on your own computer](#run-it-on-your-own-computer)
+- [Troubleshooting](#troubleshooting)
+- [Project structure](#project-structure)
+- [Deploying to Vercel](#deploying-to-vercel)
+- [Limitations](#limitations)
+- [Future work](#future-work)
+- [Glossary](#glossary)
+- [Credits](#credits)
+
+## The problem it solves
+
+When you buy something online, the store keeps your name, address, phone number and order history.
+Many employees can open that data, and most of them need it for their work. But what if one employee
+quietly exports thousands of customer records at 2 a.m.? Or a customer asks, "Please stop sending me
+promo texts," and nobody can show it was done?
+
+Companies need answers to three questions:
+
+1. **Are customers in control?** Can they see and change their consents, and ask for a copy, a correction or deletion of their data?
+2. **Is anyone misusing the data?** Out of thousands of normal look-ups every day, which few deserve a closer look?
+3. **Can we prove it?** If something goes wrong, is there a record of who did what that nobody can secretly edit?
+
+DataGuard AI is a small, working answer to all three.
+
+## How it works
+
+```mermaid
+flowchart LR
+  U["You in a web browser"] --> FE["Frontend<br/>Next.js web pages"]
+  FE -- "API calls with a login token" --> BE["Backend<br/>Express API"]
+  BE -- "reads and writes" --> DB[("Database<br/>PostgreSQL")]
+  BE -- "asks for predictions" --> ML["ML service<br/>FastAPI + Python models"]
+```
+
+The app has four parts. Each one runs as its own program.
+
+| Part | What it does | Built with |
+|---|---|---|
+| **Frontend** | The pages you see: the customer portal and the staff console. It never touches the database directly. | Next.js (React), TypeScript |
+| **Backend** | The "front desk." It checks who you are and what your role allows, saves changes, writes the audit log, and asks the ML service for predictions. | Express (Node.js), TypeScript |
+| **ML service** | The "analyst." It loads the trained models and answers questions like "how unusual is this event?" Only the backend can call it. | FastAPI (Python), scikit-learn, SHAP |
+| **Database** | Where everything is stored: users, consents, requests, access logs, alerts, incidents and the audit log. | PostgreSQL |
+
+A few terms you will meet right away:
+
+- **API (Application Programming Interface):** a set of web addresses that programs use to talk to each other. For example, the frontend sends `POST /api/auth/login` with your email and password, and the backend replies.
+- **JWT (JSON Web Token):** after you log in, the backend gives your browser a signed "digital ID card." The browser shows it on every request, so the backend knows who you are and what your role is, such as customer or DPO.
+- **Role-based access control (RBAC):** each role can only do certain things. For example, a customer who tries to open the staff console is sent back to the portal, and the API refuses the request.
+- **Hash chain:** every important action is added to an audit log with a short "fingerprint" (a SHA-256 hash) that also includes the previous row's fingerprint. If anyone edits an old row later, every link after it stops matching, and *Verify hash chain* spots the change.
+
+What happens when an employee opens customer data:
+
+1. The access event is saved in the database.
+2. The backend sends it to the ML service, which gives it a **risk score** from 0 to 1.
+3. If the score is 0.5 or higher (the default threshold), the backend creates an **alert** marked *flagged for review*.
+4. A DPO or security analyst opens the alert, reads the explanation, and decides: *confirmed* or *false positive*.
+5. Every decision is written to the **hash-chained audit log**.
+
+## Features
+
+| Feature | What it does, in plain words | Where in the code |
+|---|---|---|
+| Login and roles | Signs you in and limits each role to what it is allowed to do | `backend/src/routes/auth.ts`, `backend/src/lib/auth.ts` |
+| Consent management | Customers switch each use of their data on or off (marketing email, SMS promos, and so on) and see the full history | `backend/src/routes/consents.ts`, `frontend/src/app/portal/consents` |
+| Data-rights requests | Customers ask for a copy, a correction or deletion of their data; the DPO tracks and answers each request | `backend/src/routes/requests.ts`, `frontend/src/app/portal/requests`, `frontend/src/app/admin/requests` |
+| Privacy assistant | Answers privacy questions by quoting the store's policy documents, and says "not covered" instead of guessing | `ml-service/app/rag.py`, `frontend/src/app/portal/assistant` |
+| Anomaly alerts | Scores every employee access event and flags unusual ones for a person to review | `backend/src/jobs/scorer.ts`, `ml-service/app/main.py` |
+| Alert explanations | Shows which details pushed the risk score up or down | `ml-service/app/main.py` (SHAP), `frontend/src/app/admin/alerts/[id]` |
+| Simulate events | A button on *Access logs* that adds 5 fake access events and scores them on the spot, which is handy for live demos | `backend/src/routes/accessLogs.ts`, `frontend/src/app/admin/access-logs` |
+| Incident management | Records incidents, suggests a category with ML, and tracks owners, status and corrective actions | `backend/src/routes/incidents.ts`, `frontend/src/app/admin/incidents` |
+| Risk trend | Charts daily alerts or incidents with a 7-day average and a simple 14-day projection | `ml-service/app/forecast.py`, `frontend/src/app/admin/risk` |
+| Model performance | Shows the models' test results honestly, including their mistakes | `ml-service/models/metrics.json`, `frontend/src/app/admin/models` |
+| Audit log | Records every important action in a chain that reveals any later edit | `backend/src/lib/audit.ts`, `frontend/src/app/admin/audit` |
+| Privacy in logs | Hides emails, phone numbers and tokens in server logs | `backend/src/lib/mask.ts` |
+| User management | The admin creates staff accounts and changes roles | `backend/src/routes/users.ts`, `frontend/src/app/admin/users` |
+| Demo mode | An optional frontend-only version with saved sample answers, so no server is needed | `frontend/src/lib/demo.ts`, `frontend/src/demo/fixtures.json` |
+
+## The machine learning, explained simply
+
+> All numbers below were measured on **synthetic (fake) data** made by `data/generate.py`. They show the
+> system works end to end. They do **not** tell you how well it would work on a real company's data.
+
+### 1. Spotting unusual data access (anomaly detection)
+
+**Anomaly detection** means finding the few events that look very different from the rest. Nobody tells
+the model which events are "bad"; it learns what normal looks like and flags what doesn't fit.
+
+The model is an **Isolation Forest**. Picture playing "20 questions" to single out one event: "Was it
+after 8 p.m.? Were more than 500 records opened?" A strange event gets isolated after only a few
+questions, while a normal one needs many. The forest asks these random questions with 300 trees and
+turns "isolated quickly" into a high risk score.
+
+The model looks at the hour, the number of records and distinct customers opened, off-hours and weekend
+flags, whether data was exported, failed logins, and the employee's role. It was trained on the first
+60 days of fake logs and tested on the last 30 days: 2,718 events, of which 127 were planted anomalies.
+
+| Measure | Result | What it means |
+|---|---|---|
+| Precision | **0.790** | When it raises an alert, it is right about 79 % of the time. |
+| Recall | **0.890** | It catches about 89 % of the planted suspicious events (113 of 127). |
+| F1 | **0.837** | One number that balances precision and recall (1.0 is perfect). |
+| False-positive rate | **0.0116** | It wrongly flags about 1 in 86 normal events (30 of 2,591). |
+
+It is best at off-hours bulk exports and credential misuse (recall 1.00 for both) and weakest at
+"role mismatch" (0.72), because the model doesn't know which roles *should* see which data.
+
+**SHAP (SHapley Additive exPlanations)** is a method that splits a prediction into "how much each
+detail contributed." On every alert you see a bar chart. Red bars, such as *Records accessed = 1,332*,
+pushed the score toward suspicious, and blue bars pushed it toward normal. This helps a person judge the
+alert. It explains what the model reacted to, **not** what the employee intended.
+
+### 2. Sorting incident reports (text classification)
+
+When staff write an incident report, the system suggests one of 6 categories: unauthorized access,
+data leak, phishing, misconfiguration, policy violation or lost device. The text is turned into numbers
+with **TF-IDF** (explained below), and two models were compared on 180 test reports:
+
+| Model | Accuracy | Macro F1 |
+|---|---|---|
+| Logistic Regression | 0.844 | 0.844 |
+| Random Forest (used in the app) | **0.850** | **0.847** |
+
+**Accuracy** is the share of reports put in the right category. **Macro F1** is the F1 score averaged
+over the 6 categories, so small categories count as much as big ones. The two models are practically tied.
+To keep the task realistic, 4 % of the training labels were deliberately made wrong. The suggestion is
+advisory only, and a person confirms the final category.
+
+### 3. Answering privacy questions (RAG)
+
+**RAG (Retrieval-Augmented Generation)** means "first look up the relevant document, then answer from it."
+This assistant **retrieves** the best-matching section of the 5 sample policy documents and quotes it with
+a citation. It does not make up text.
+
+- On the live site, matching uses **TF-IDF** (Term Frequency–Inverse Document Frequency). It scores words that are frequent in a section but rare elsewhere, such as "consent" or "retention," higher than common words.
+- In the Docker version, it first tries a small embedding model (MiniLM + FAISS) that matches by meaning. If that isn't available, it falls back to TF-IDF automatically.
+- If nothing matches well enough, or the question isn't about privacy (for example, "Who won the NBA finals?"), it answers that the question is **not covered by policy**.
+
+For the full methodology, per-pattern results and the trend analysis, see [docs/TECHNICAL.md](docs/TECHNICAL.md#ml-methodology--evaluation).
+
+## Why synthetic data?
+
+**Synthetic data** is realistic-looking data generated by a program. Here, `data/generate.py` creates
+400 fake customers, 60 fake employees, 90 days of access logs with planted suspicious events, and
+900 incident reports. It uses a fixed random seed, so the results are the same every time.
+
+We don't use real data because personal information is protected by law. In the Philippines, the
+**Data Privacy Act of 2012 (Republic Act No. 10173)** requires a lawful basis, proper safeguards and
+respect for people's rights over their data. A student project has no reason to handle real people's
+records. Synthetic data lets us build and test everything safely. The policy documents in
+`data/policies/` are fictional samples that mention the law only in general terms, and they are **not legal advice**.
+
+## Run it on your own computer
+
+The easiest way is **Docker**, which runs all four parts with one command.
+
+### What you need
+
+- **Git**, to download the code: https://git-scm.com/downloads
+- **Docker Desktop**, to run everything: https://www.docker.com/products/docker-desktop/ (on Linux you can use Docker Engine with the Compose plugin instead)
+- Optional, only if you want to run the parts without Docker:
+  - **Node.js 20 or newer:** https://nodejs.org/
+  - **Python 3.11 or newer:** https://www.python.org/downloads/
+  - **PostgreSQL 14 or newer:** https://www.postgresql.org/download/
+
+### Steps
+
+1. **Open a terminal.** On Windows, use PowerShell or Git Bash. On macOS or Linux, use Terminal.
+2. **Download the project:**
+   ```bash
+   git clone https://github.com/devA1drin/dataguard-ai.git
+   cd dataguard-ai
+   ```
+3. **Create your settings file** by copying the example:
+   ```bash
+   cp .env.example .env
+   ```
+   On Windows PowerShell, use `copy .env.example .env`. Then open `.env` and change `JWT_SECRET` to any long random text.
+4. **Start Docker Desktop** and wait until it says it is running.
+5. **Build and start everything:**
+   ```bash
+   docker compose up --build
+   ```
+   The first run takes several minutes because it downloads the base images and Python packages (including PyTorch) and trains the models. Leave this terminal open.
+6. **Open the app** at http://localhost:3000 and sign in with any demo account above.
+
+What you should see:
+
+| Address | What's there |
 |---|---|
-| Synthetic data (customers, consents, access logs with labelled anomalies, incident texts) | `data/generate.py` |
-| Sample privacy policies | `data/policies/*.md` |
-| Schema (11 tables) + append-only trigger | `db/init.sql` |
-| Seed (demo users with bcrypt hashes, recent logs, incidents, requests) | `db/build_seed.py` → `db/seed.sql` |
-| JWT login, bcrypt, RBAC guards | `backend/src/routes/auth.ts`, `backend/src/lib/auth.ts` |
-| Consents + history | `backend/src/routes/consents.ts`, `frontend/src/app/portal/consents` |
-| Data-rights requests (customer + DPO) | `backend/src/routes/requests.ts`, `frontend/src/app/portal/requests`, `frontend/src/app/admin/requests` |
-| Privacy assistant (RAG, citations, refusal) | `ml-service/app/rag.py`, `frontend/src/app/portal/assistant` |
-| Access-log scoring job, alert creation, simulator | `backend/src/jobs/scorer.ts` |
-| Ingestion endpoint (score on arrival) | `POST /api/access-logs/ingest` in `backend/src/routes/accessLogs.ts` |
-| Real-time alert push (SSE) | `backend/src/routes/alerts.ts` (`/stream`), `frontend/src/components/AppShell.tsx` |
-| Human review of alerts | `PATCH /api/alerts/:id/review`, `frontend/src/app/admin/alerts/[id]` |
-| Isolation Forest + SHAP | `ml-service/training/train_anomaly.py`, `ml-service/app/main.py` |
-| Shared feature engineering | `ml-service/app/features.py` |
-| Incident classifiers (LogReg vs RF) | `ml-service/training/train_incidents.py` |
-| Incidents: assignment, status, notes, corrective actions | `backend/src/routes/incidents.ts`, `frontend/src/app/admin/incidents/[id]` |
-| Risk trend | `ml-service/app/forecast.py`, `backend/src/routes/analytics.ts`, `frontend/src/app/admin/risk` |
-| Model metrics | `ml-service/models/metrics.json` (generated), `frontend/src/app/admin/models` |
-| Hash-chained audit log + verification | `backend/src/lib/audit.ts`, `backend/src/routes/audit.ts`, `frontend/src/app/admin/audit` |
-| PII masking in logs and audit details | `backend/src/lib/mask.ts` |
-| Data minimization in customer responses | explicit column lists in `consents.ts` / `requests.ts` |
-| Users & roles | `backend/src/routes/users.ts`, `frontend/src/app/admin/users` |
-| Demo mode | `frontend/src/lib/demo.ts`, `frontend/src/demo/fixtures.json`, `frontend/scripts/export-demo-fixtures.mjs` |
+| http://localhost:3000 | The DataGuard AI login page |
+| http://localhost:4000/api/health | `{"status":"ok","db":"ok","runtime":"server"}` |
+| http://localhost:8000/docs | The ML service's interactive API page (Swagger UI) |
 
-## ML methodology & evaluation
+After start-up, the backend scores the roughly 1,900 seeded access events, which creates about 100 alerts.
+A simulator then adds a fake access event every 20 seconds, so new alerts keep appearing.
 
-Run `python -m training.run_all` to reproduce these numbers. The seed is fixed at 42 and
-`models/metrics.json` is regenerated on each run. **All numbers are on synthetic data.**
+- **To stop:** press `Ctrl + C` in the terminal.
+- **To delete all data and start fresh:** run `docker compose down -v`.
 
-### 1. Access-log anomaly detection: Isolation Forest
+> **Honest note:** the full Docker setup was tested end to end before the project was adapted for Vercel.
+> Those changes touched the ML Dockerfile (its Python packages are now split into `requirements.txt` +
+> `requirements-extras.txt`) and the backend entry files. The compose file still validates
+> (`docker compose config`) and the backend still compiles, but a full `docker compose up --build`
+> **has not been re-run since**, because Docker wasn't available on the machine used for those changes.
+> If something fails, please open an issue.
 
-- **Features** (`app/features.py`):
-  - hour of day, records accessed, distinct customers, off-hours flag, weekend flag, export flag, failed logins
-  - log(records), the distinct-customer ratio, and one-hot employee role
-- **Training:** unsupervised. The `is_anomaly` labels are **never** used for fitting.
-  - `IsolationForest(n_estimators=300, contamination=0.05)`
-- **Split:** chronological. The first 60 days are used for fitting (5,473 events) and the last 30 days for evaluation (2,718 events, 4.7 % injected anomalies).
-- **Score:** the risk score is `sigmoid(-decision_function / std)`, so 0.5 is the model's own boundary. The alert threshold is configurable with `ALERT_THRESHOLD`.
-- **Explanations:** `shap.TreeExplainer` on the forest, with the sign flipped so that a positive value means "pushed toward anomalous".
+To run each part without Docker, see [Running without Docker](docs/TECHNICAL.md#running-without-docker).
 
-| Metric | Value |
+## Troubleshooting
+
+| Problem | What to try |
 |---|---|
-| Precision | **0.790** |
-| Recall | **0.890** |
-| F1 | **0.837** |
-| False-positive rate | **0.0116** (30 of 2,591 normal events) |
-| ROC-AUC | 0.996 |
-| Average precision | 0.928 |
-| Confusion matrix | TN 2561 · FP 30 · FN 14 · TP 113 |
+| `Cannot connect to the Docker daemon` or `docker: command not found` | Start Docker Desktop and wait until it is running, then try again. On Linux, run `sudo systemctl start docker`, or add your user to the `docker` group. |
+| `port is already allocated` / `address already in use` (3000, 4000, 8000 or 5432) | Another program is using that port, often a local PostgreSQL on 5432 or another dev server on 3000. Stop it, or change the left-hand number of that `ports:` line in `docker-compose.yml`, for example `"5433:5432"`. |
+| `cp: command not found` on Windows | Use `copy .env.example .env` in PowerShell, or run the command in Git Bash. |
+| The build stops while installing Python packages | Check your internet connection, then run `docker compose build --no-cache ml-service` and start again. |
+| The page loads but login fails | Wait until the backend log says it is listening. It waits for the database and ML service to be healthy first. Check http://localhost:4000/api/health. |
+| No alerts or empty charts | Give the backend a minute to score the seeded events, then refresh. |
+| You want a clean start | Run `docker compose down -v`, then `docker compose up --build`. |
 
-Recall for each injected pattern:
+## Project structure
 
-| Pattern | Recall |
-|---|---|
-| bulk_export_offhours | 1.00 |
-| credential_misuse | 1.00 |
-| slow_exfiltration | 0.92 |
-| mass_lookup | 0.87 |
-| role_mismatch | 0.72 |
+```
+dataguard-ai/
+├── frontend/          Web pages: customer portal (src/app/portal) and staff console (src/app/admin)
+├── backend/           Express API: login, roles, routes, audit log, scoring job (src/)
+├── ml-service/        Python ML service: API (app/), training scripts (training/), trained models (models/)
+│   └── policies/      Copy of the policy documents bundled for the Vercel deployment
+├── data/              Synthetic data generator (generate.py) and sample policy documents (policies/)
+├── db/                Database schema (init.sql) and demo seed data (seed.sql, built by build_seed.py)
+├── docs/              Technical reference (TECHNICAL.md) and screenshots
+├── scripts/           Playwright scripts for screenshots and live end-to-end checks
+├── docker-compose.yml Runs all four parts locally with Docker
+├── vercel.json        Tells Vercel how to deploy the three services together
+└── .env.example       Template for your local settings (copy to .env)
+```
 
-Role-mismatch events are the hardest. The model has no notion of *which role should be allowed to see which data*.
+## Deploying to Vercel
 
-**Why these numbers are optimistic:** the anomalies were injected by the same generator that
-defines "normal". Real insider misuse is rarer, more varied and often looks like normal work.
+The live site runs on **Vercel**, a hosting platform. One Vercel project hosts the frontend, the backend
+and the ML service as three "services" listed in `vercel.json`. The database is a free **Neon Postgres**
+database added from the Vercel Marketplace.
 
-### 2. Incident report classification: TF-IDF + two models
+In short:
 
-- **Data:** 900 synthetic reports across 6 categories:
-  - unauthorized_access, data_leak, phishing, misconfiguration, policy_violation, lost_device
-- **Realism:** about 35 % of reports mix in a sentence from another category, and **4 % label noise** is
-  injected on purpose so the task isn't trivial.
-- **Features:** TF-IDF on 1–2 word n-grams (sublinear TF, English stop-words).
-- **Evaluation:** a stratified 80/20 split (720 train, 180 test), plus 5-fold CV on the training part.
+1. Install the Vercel CLI (`npm i -g vercel`), run `vercel login`, then run `vercel link` in the project folder.
+2. Add a Neon Postgres database to the project from the Vercel dashboard (Storage → Marketplace). This sets `DATABASE_URL`.
+3. Load `db/init.sql` and then `db/seed.sql` into that database.
+4. Set these environment variables:
+   - `JWT_SECRET` and `CRON_SECRET`: long random strings
+   - `NEXT_PUBLIC_API_URL=/`
+   - `NEXT_PUBLIC_ALERT_TRANSPORT=poll`
+   - `NEXT_PUBLIC_DEMO_MODE=false`
+   - `RAG_BACKEND=tfidf`
+   - `SIMULATE_ACCESS_LOGS=false`
+5. Run `vercel deploy --prod`.
 
-| Model | Accuracy | Macro P | Macro R | Macro F1 | 5-fold CV macro-F1 |
-|---|---|---|---|---|---|
-| Logistic Regression (C=5) | 0.844 | 0.855 | 0.842 | 0.844 | 0.826 ± 0.037 |
-| Random Forest (300 trees) | **0.850** | 0.853 | 0.845 | **0.847** | 0.818 ± 0.036 |
-
-Both models score about the same: the test gap is smaller than the CV standard deviation. Random
-Forest is selected for serving by test macro-F1. The UI shows both models' top-3 predictions and
-whether they agree. The suggestion is only advisory, and a reviewer sets the confirmed category.
-
-### 3. Risk trend analysis
-
-- **Data:** daily counts of alerts that are not false positives, or of incidents, built from the database.
-- **Method:** a 7-day rolling mean, plus an OLS line fitted to the last 30 days and projected 14 days ahead.
-  The band is ±1.96 × the residual standard deviation.
-- **Trend level:** a transparent rule on the slope and the change against the baseline gives *stable*, *elevated* or *high*.
-- **Purpose:** this is simple trend analysis for planning, not a forecasting model.
-
-### 4. Privacy assistant: retrieval-grounded answers
-
-- **Indexing:** the policy docs are split into one chunk per `##` section (23 chunks).
-- **Retrieval:**
-  - Primary: `all-MiniLM-L6-v2` embeddings with a FAISS `IndexFlatIP` (cosine similarity).
-  - Re-ranking: candidates are re-ranked by `0.75·cosine + 0.25·tfidf`.
-  - Fallback: TF-IDF retrieval is used automatically if the model or FAISS can't be loaded, or when `RAG_BACKEND=tfidf`.
-- **Answer:** the default is **extractive**. It quotes the best passage, adds a second one if it is
-  nearly as relevant, and returns all citations with document, section and score.
-- **Optional LLM summary:** if `OPENAI_API_KEY` is set, an LLM is asked to summarize **only** the
-  retrieved passages. Any failure falls back to the extractive answer.
-- **Refusal:** if the best cosine similarity is below 0.40 (or 0.12 for TF-IDF), the assistant answers
-  *"not covered by policy"* and returns no citations.
-- **Spot checks:** these are informal checks, not a benchmark.
-  - In-scope questions about consent, retention, deletion, sharing, the DPO and breaches scored 0.52–0.76 and were answered from the right section.
-  - Off-topic questions ("best pizza in Makati", "weather tomorrow") scored 0.03–0.08 and were refused.
-
-## Security & privacy design
-
-- **Passwords and sessions:** passwords are hashed with bcrypt (`bcryptjs`, cost 10). Sessions use JWTs that expire after 8 h by default.
-- **Access control:** RBAC is enforced on every route on the server. The UI hides links too, but that is only for convenience.
-- **Hash-chained audit log:** every mutating action writes an audit row (logins and failed logins included). Each row stores
-  `hash = sha256(prev_hash + canonical_json(created_at, actor, action, entity, details))`.
-  - Writes are serialized with a Postgres advisory lock so the chain can't fork.
-  - A DB trigger blocks UPDATE and DELETE on `audit_logs`.
-  - Editing a row directly as a superuser **is detected** by `GET /api/audit-logs/verify`. This was tested by changing one row's details, and verification reported the exact row.
-- **Data minimization:**
-  - Customer endpoints select explicit columns only. `handled_by` and `internal_note` are never returned to customers.
-  - Employees appear as pseudonymous IDs in the alert views.
-- **PII masking:**
-  - The request logger records only method, path and status (no bodies or query strings).
-  - `safeLog()` masks emails (`j***@example.ph`), PH mobile numbers and JWTs.
-  - Audit `details` pass through the same masker, which also redacts keys such as `email`, `password` and `phone`.
-
-## Ethical considerations
-
-- **Alerts are not accusations.**
-  - Every model flag starts as *flagged for review*, and nothing is decided automatically.
-  - The SHAP view explains *what the model reacted to*, not intent.
-  - The UI reminds reviewers to check context the model can't see, such as approved tickets and scheduled jobs.
-- **Feedback loop.** Reviewer decisions (confirmed or false positive) are stored, so precision on real
-  alerts can be measured and the threshold tuned. False positives are excluded from the risk trend.
-- **Employee monitoring is itself processing of personal data.** A real deployment needs:
-  - a lawful basis
-  - a clear notice to staff
-  - proportionality and retention limits for access logs
-  - restricted access to the console
-- **Bias.** A role-based feature can make some roles, such as analysts with naturally high volumes,
-  look riskier or safer. Check error rates per role before relying on scores.
-- **The assistant is not legal advice.** It quotes the company's own documents and refuses when they
-  don't cover a question, rather than inventing an answer.
+On Vercel there are no always-running background jobs. Events are scored as they arrive, a daily scheduled
+job (a Vercel Cron) scores anything left over, and the browser checks for new alerts every 15 seconds.
+Full details are in [docs/TECHNICAL.md](docs/TECHNICAL.md#live-deployment-on-vercel).
 
 ## Limitations
 
-- **Synthetic data:** the metrics reflect the generator's assumptions. Real logs would need
-  re-engineered features, retraining and proper validation.
-- **Static models:** Isolation Forest has a fixed contamination prior. Nothing retrains or detects drift yet.
-- **Simple trend analysis:** the trend is a linear fit, so it does not model seasonality.
-- **Small policy set:** the RAG corpus is 5 short documents, and the similarity thresholds were tuned by hand on a few questions.
-- **Auth is MVP-level:**
-  - no refresh tokens, MFA, password reset or rate limiting on login
-  - the JWT is stored in localStorage
-  - the SSE stream takes the token in the query string, because EventSource can't set headers
-- **Audit chain limits:** the hash chain detects tampering but can't stop a DB superuser from rewriting the whole chain. Anchoring the latest hash outside the database would close that gap.
-- **Only partly fulfilled requests:** the data-rights workflow tracks status but doesn't export or delete data automatically.
-- **Weekday drift:** seed timestamps are shifted to look recent, so the stored `is_weekend` feature may not match the shifted calendar day.
-- **Few automated tests:** verification was done with scripted API calls and browser runs, described below. There are no unit tests yet.
-- **Demo mode limits:** it uses a fixed snapshot. New incidents created in demo mode get no ML classification, and the assistant only knows the pre-computed questions.
+- **Fake data, optimistic numbers.** The suspicious events were planted by the same program that defines "normal," so real misuse would be harder to catch.
+- **Models don't learn over time.** Nothing retrains automatically or detects when behavior changes.
+- **Simple trend line.** The risk projection is a straight-line fit, not a real forecast.
+- **Small policy set.** The assistant knows only 5 short sample documents.
+- **Prototype-level security.** There is no multi-factor login, password reset or login rate limit, and the token is kept in the browser's localStorage.
+- **Audit chain limits.** The chain reveals edits, but a database superuser could rewrite the whole chain.
+- **Requests are tracked, not executed.** Data-rights requests are tracked, but data is not exported or deleted automatically.
+- **Few automated tests.** Checks are scripted API calls and browser runs; there are no unit tests yet.
+
+The full list is in [docs/TECHNICAL.md](docs/TECHNICAL.md#limitations).
 
 ## Future work
 
-- **Model work:** feedback-driven threshold tuning and periodic retraining. Per-employee baselines (peer-group models), and
-  supervised models once enough reviewed alerts exist.
-- **Security:** MFA, rate limiting, refresh tokens in httpOnly cookies, and audit-hash anchoring to object storage or a timestamping service.
-- **Data-rights automation:** generate access exports and run deletion or anonymization jobs.
-- **Workflows:** breach-notification support (NPC timelines checklist) and a DPO reporting export.
-- **Testing:** unit and integration tests in CI (Jest for the API, pytest for ML, Playwright for the UI).
-- **Assistant:** a larger, versioned policy corpus with a proper retrieval evaluation set.
+- Use reviewers' decisions to tune the alert threshold, and retrain models regularly.
+- Compare each employee with similar co-workers (peer-group baselines).
+- Add multi-factor login, rate limiting and safer token storage.
+- Automate data exports and deletions for data-rights requests.
+- Add unit and integration tests that run automatically (CI).
+- Grow the policy library and build a proper test set for the assistant.
 
-## How this MVP was verified
+## Glossary
 
-Everything below was run on the development machine. Docker networking needed the host's
-iptables to be switched to legacy mode in that sandbox; that is a property of that machine, not of the project.
+| Term | Meaning |
+|---|---|
+| **Anomaly detection** | Finding the few items that look very different from the rest. |
+| **API** | A set of web addresses that programs use to send requests and get answers. |
+| **Audit log** | A record of who did what and when. |
+| **Consent** | A customer's permission for a specific use of their data, such as marketing emails. |
+| **Data Protection Officer (DPO)** | The person in a company responsible for privacy compliance. |
+| **F1 score** | One number combining precision and recall; 1.0 is perfect. |
+| **False positive** | An alert on something that was actually normal. |
+| **Hash** | A short "fingerprint" of data (here SHA-256). Changing even one letter of the data changes the fingerprint completely. |
+| **Hash chain** | Each audit entry's fingerprint also includes the previous entry's fingerprint, so editing an old entry breaks every link after it. *Verify hash chain* re-checks all links. |
+| **Isolation Forest** | An anomaly-detection model that flags events that are easy to "isolate" with a few random yes/no questions. |
+| **JWT** | A signed token the browser shows on each request to prove who is logged in. |
+| **Machine learning (ML)** | Programs that learn patterns from example data instead of following hand-written rules. |
+| **Precision** | Of the alerts raised, the share that were truly suspicious. |
+| **RAG** | Retrieval-Augmented Generation: look up relevant documents first, then answer from them. |
+| **Recall** | Of the truly suspicious events, the share that were caught. |
+| **RBAC** | Role-based access control: permissions depend on your role. |
+| **SHAP** | A method that shows how much each input detail pushed a prediction up or down. |
+| **Synthetic data** | Realistic but fake data generated by a program. |
+| **TF-IDF** | A way to turn text into numbers that gives more weight to distinctive words. |
 
-- **Data and training:**
-  - `python data/generate.py` and `python -m training.run_all` produced the metrics above.
-  - The Docker build reproduced the same metrics.
-- **ML service:** every endpoint was tested with curl (`/health`, `/anomaly/score`, `/anomaly/explain`,
-  `/incidents/classify`, `/risk/forecast` GET and POST, `/assistant/ask` including refusals, `/metrics`).
-  The TF-IDF fallback was tested with `RAG_BACKEND=tfidf`.
-- **Backend:**
-  - It type-checks and builds.
-  - Login, consents, requests, alert review, incident create/update/actions, user management and SSE were exercised against PostgreSQL 17.
-  - RBAC denials were checked: an executive cannot review alerts or list users; a customer cannot read incidents; a request with no token is rejected.
-  - The audit chain verified as valid, and a manual edit was detected.
-- **Frontend:** `next build` passes in both live and demo mode.
-- **End to end:** Playwright drove the browser against the native stack and again against the Docker stack:
-  - login (a wrong password is rejected), the dashboard and model metrics
-  - alert review, then opening an incident from that alert (ML classification shown)
-  - audit verification, a customer consent toggle and an assistant answer
-  - a customer being redirected away from `/admin`
-- **Full Docker run:** `docker compose up --build` brought up all 4 services. They became healthy and passed the same browser test.
+## Credits
+
+Built as a capstone / portfolio project. It uses open-source tools including Next.js, React, Express,
+FastAPI, scikit-learn, SHAP, PostgreSQL and Playwright. All names, customers, employees and policies
+are fictional. The project is hosted on Vercel with a Neon Postgres database.

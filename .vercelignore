@@ -1,0 +1,18 @@
+# Files never uploaded to Vercel. (Unlike .gitignore, the trained models in
+# ml-service/models/*.joblib ARE uploaded: the ML service loads them at runtime.)
+**/node_modules
+**/.next
+**/.venv
+**/__pycache__
+**/*.pyc
+**/dist
+ml-service/.hf
+data/generated
+.env
+.env*.local
+.vercel
+docker-compose.yml
+**/Dockerfile
+
+# Artifacts of a local `vercel build`
+**/_uv

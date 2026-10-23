@@ -1,0 +1,9 @@
+# Serving + training core. This is all the Vercel deployment installs (Python function,
+# stays well under the 500 MB bundle limit). The assistant uses TF-IDF retrieval here.
+pandas==3.0.6
+numpy==2.5.4
+scikit-learn==1.9.1
+shap==0.54.1
+joblib==1.6.0
+fastapi==0.159.1
+pydantic==2.14.1

@@ -1,0 +1,42 @@
+# Dependencies / build output
+node_modules/
+.next/
+dist/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+ml-service/.hf/
+
+# Secrets and local env (only the documented template is committed)
+.env*
+!.env.example
+
+# Vercel
+.vercel
+
+# Generated synthetic data (re-create with: python data/generate.py)
+data/generated/
+*.csv
+
+# Model artifacts: only the small, compressed trained models used by the Vercel ML
+# service are committed (ml-service/models/*.joblib, ~2.6 MB). Nothing else.
+*.pkl
+*.pt
+*.bin
+*.onnx
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# Artifacts of a local `vercel build`
+_uv/

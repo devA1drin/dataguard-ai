@@ -1,0 +1,8 @@
+# Extras for the long-running server (Docker / local), installed on top of requirements.txt.
+uvicorn[standard]==0.54.0
+# Dense retrieval for the assistant (MiniLM + FAISS). Optional: without these the service
+# falls back to TF-IDF retrieval automatically. torch (CPU) is installed separately in the Dockerfile.
+sentence-transformers==6.2.0
+faiss-cpu==1.15.1
+# Used only by db/build_seed.py
+bcrypt==5.0.0

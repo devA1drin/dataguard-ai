@@ -1,0 +1,57 @@
+# DataGuard AI - full stack.  Usage:  cp .env.example .env && docker compose up --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: dataguard
+      POSTGRES_USER: dataguard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dataguard}
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dataguard -d dataguard"]
+      interval: 5s
+      retries: 20
+
+  ml-service:
+    build: { context: ., dockerfile: ml-service/Dockerfile }
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      RAG_BACKEND: ${RAG_BACKEND:-embeddings}
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      start_period: 60s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://dataguard:${POSTGRES_PASSWORD:-dataguard}@postgres:5432/dataguard
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-env}
+      ML_SERVICE_URL: http://ml-service:8000
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      ALERT_THRESHOLD: ${ALERT_THRESHOLD:-0.5}
+      SIMULATE_ACCESS_LOGS: ${SIMULATE_ACCESS_LOGS:-true}
+      SIMULATE_INTERVAL_MS: ${SIMULATE_INTERVAL_MS:-20000}
+    ports: ["4000:4000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      ml-service: { condition: service_healthy }
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+        NEXT_PUBLIC_DEMO_MODE: "false"
+    ports: ["3000:3000"]
+    depends_on: [backend]
+
+volumes:
+  pgdata:

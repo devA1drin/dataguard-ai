@@ -1,0 +1,48 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "nextjs"
+    },
+    "backend": {
+      "root": "backend",
+      "framework": "express",
+      "entrypoint": "src/app.ts",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "ml",
+          "format": "url",
+          "env": "ML_SERVICE_URL"
+        }
+      ],
+      "buildCommand": "echo 'Vercel compiles src/app.ts itself; tsc build is for Docker'"
+    },
+    "ml": {
+      "root": "ml-service",
+      "framework": "fastapi",
+      "entrypoint": "app/main.py"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": {
+        "service": "backend"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "frontend"
+      }
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/score",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

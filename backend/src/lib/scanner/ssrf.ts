@@ -197,7 +197,7 @@ export async function safeFetch(raw: string, resolver: Resolver = defaultResolve
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     let pinned: { address: string; family: number };
     try { pinned = await resolvePublic(u.hostname, resolver); } catch (e) {
-      if (i > 0 && e instanceof BlockedError) throw new BlockedError(`Redirect blocked at hop ${i}: the site tried to send the scanner to ${u.host}. ${e.message}`);
+      if (i > 0 && e instanceof BlockedError) throw new BlockedError(`Redirect blocked at hop ${i + 1}: the site tried to send the scanner to ${u.host}. ${e.message}`);
       throw e;
     }
     const { hop, body, truncated } = await oneRequest(u, pinned);

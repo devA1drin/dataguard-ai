@@ -1,7 +1,7 @@
 "use client";
 import {
   Activity, BarChart3, BrainCircuit, ClipboardList, FileLock2, Gauge, LogOut, MessageCircleQuestion, ScrollText,
-  ShieldCheck, ShieldAlert, Users, FileSearch, Radar, Crosshair, Fish, ListChecks, UserRoundCog,
+  ShieldCheck, ShieldAlert, Users, FileSearch, Radar, Crosshair, Fish, ListChecks, UserRoundCog, ScanSearch,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -18,6 +18,7 @@ const CUSTOMER_NAV: NavItem[] = [
   { href: "/portal/consents", label: "My consents", icon: ShieldCheck, roles: ["customer"] },
   { href: "/portal/requests", label: "Data rights requests", icon: FileLock2, roles: ["customer"] },
   { href: "/portal/assistant", label: "Privacy assistant", icon: MessageCircleQuestion, roles: ["customer"] },
+  { href: "/portal/scanner", label: "Website scanner", icon: ScanSearch, roles: ["customer"], section: "Stay safe online" },
   { href: "/portal/security", label: "My security", icon: UserRoundCog, roles: ["customer"], section: "Account" },
 ];
 const STAFF_NAV: NavItem[] = [
@@ -32,6 +33,7 @@ const STAFF_NAV: NavItem[] = [
   { href: "/admin/users", label: "Users & roles", icon: Users, roles: ["admin"] },
   { href: "/admin/soc", label: "SOC dashboard", icon: Radar, roles: REVIEWERS, section: "Security operations" },
   { href: "/admin/threats", label: "Threats & sign-ins", icon: Crosshair, roles: REVIEWERS, section: "Security operations" },
+  { href: "/admin/scanner", label: "Website scanner", icon: ScanSearch, roles: ["dpo", "security", "admin", "executive"], section: "Security operations" },
   { href: "/admin/phishing", label: "Phishing detector", icon: Fish, roles: REVIEWERS, section: "Security operations" },
   { href: "/admin/self-check", label: "Security self-check", icon: ListChecks, roles: REVIEWERS, section: "Security operations" },
   { href: "/admin/security", label: "My security", icon: UserRoundCog, roles: ["dpo", "security", "admin", "executive"], section: "Account" },

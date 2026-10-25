@@ -153,6 +153,8 @@ export async function scanWebsite(input: string): Promise<ScanResult> {
     } else if (fetched.body) findings.push({ id: "not_html", category: "content", severity: fetched.contentType.match(/octet-stream|x-msdownload|x-dosexec|java-archive|zip|vnd\.android/i) ? "medium" : "info",
       title: `Not a web page (${clip(fetched.contentType || "unknown type", 60)})`, explanation: "The address returns a file instead of a page. Unexpected downloads (especially .exe, .apk, .zip) from links are a common way to spread malware." });
   } else {
+    if (new URL(url).protocol === "http:") findings.push({ id: "no_https", category: "tls", severity: "medium", title: "Link does not use HTTPS",
+      explanation: "The address starts with http:// (not https://), so the connection would not be encrypted. Anyone on the same network could read or change what you see and type." });
     findings.push({ id: "unreachable", category: "content", severity: "info", title: "Site could not be loaded", explanation: `${fetchError ?? "Unknown error"}. Only the address, domain and threat-feed checks were run.` });
   }
   findings.push(op, uh); if (gsb) findings.push(gsb);

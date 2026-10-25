@@ -99,3 +99,26 @@ export interface SelfCheckResult {
   target: string; scanned_at: string; score: number; grade: string;
   checks: { key: string; label: string; status: "pass" | "warn" | "fail" | "info"; value: string; tip: string }[];
 }
+
+/* ---- Website Scanner (live, real websites) ---- */
+export type ScanVerdict = "Safe" | "Suspicious" | "Dangerous";
+export type ScanSeverity = "info" | "low" | "medium" | "high" | "critical";
+export interface ScanFinding {
+  id: string; category: "ml" | "url" | "domain" | "tls" | "redirects" | "headers" | "content" | "threat_feed";
+  severity: ScanSeverity; title: string; explanation: string; evidence?: string; positive?: boolean;
+}
+export interface ScanTls { authorized: boolean; error: string | null; protocol: string | null; issuer: string | null; subject: string | null; validTo: string | null; daysLeft: number | null }
+export interface ScanResult {
+  id: number; created_at: string; url: string; final_url: string | null; score: number; verdict: ScanVerdict;
+  findings: ScanFinding[]; alert_id: number | null;
+  details: {
+    reachable: boolean; status: number | null; ip: string | null; duration_ms: number; truncated: boolean;
+    redirects: { url: string; status: number }[];
+    tls: ScanTls | null;
+    headers: Record<string, string | null>;
+    page: { title: string | null; forms: number; passwordFields: number; scripts: number; iframes: number } | null;
+    domain: { registrable: string | null; created: string | null; age_days: number | null; registrar: string | null };
+    ml: { probability: number; label: string } | null;
+  };
+}
+export interface ScanRow { id: number; created_at: string; url: string; final_url: string | null; score: number; verdict: ScanVerdict; serious: number; user_name: string | null; user_role: Role | null }

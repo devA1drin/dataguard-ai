@@ -8,7 +8,7 @@ import { demoApi } from "./demo";
 import type {
   AccessLog, AlertDetail, AlertRow, AlertStatus, AssistantAnswer, AuditRow, ChainResult, Consent, ConsentEvent,
   DataRequest, FeedItem, Forecast, IncidentDetail, IncidentRow, Kpis, LoginAttempt, LoginResult, Metrics, MfaSetup, MfaStatus,
-  PhishingResult, Playbook, Role, SecurityAlert, SelfCheckResult, SessionRow, SessionUser, SocOverview, StaffUser, ThreatIndicator, User,
+  PhishingResult, Playbook, Role, ScanResult, ScanRow, SecurityAlert, SelfCheckResult, SessionRow, SessionUser, SocOverview, StaffUser, ThreatIndicator, User,
 } from "./types";
 
 /** Cybersecurity endpoints - live mode only (undefined in demo mode; pages show a notice). */
@@ -31,6 +31,10 @@ export interface SecurityApi {
   threatIntel(): Promise<{ indicators: ThreatIndicator[]; note: string }>;
   simulateBruteForce(): Promise<{ attempts: number; alert: { id: number; title: string; technique_id: string; severity: string } | null }>;
   phishing(kind: "url" | "email", text: string): Promise<PhishingResult>;
+  /** Website Scanner: scans the REAL live site server-side (SSRF-guarded, static HTML only) */
+  scanWebsite(url: string): Promise<ScanResult>;
+  scans(): Promise<{ scans: ScanRow[]; scope: "all" | "own" }>;
+  scan(id: number): Promise<ScanResult>;
   playbook(incidentId: number): Promise<Playbook>;
   setPlaybookStep(incidentId: number, key: string, completed: boolean): Promise<Playbook>;
   setBreach(incidentId: number, patch: { personal_data_breach?: boolean; discovered_at?: string; npc_notified?: boolean }): Promise<Playbook>;
@@ -136,6 +140,9 @@ const sec: SecurityApi = {
   threatIntel: () => req("/soc/threat-intel"),
   simulateBruteForce: () => req("/soc/simulate/brute-force", "POST"),
   phishing: (kind, text) => req("/phishing/analyze", "POST", { kind, text }),
+  scanWebsite: async (url) => (await req<{ scan: ScanResult }>("/scanner/scan", "POST", { url })).scan,
+  scans: () => req("/scanner/scans"),
+  scan: async (id) => (await req<{ scan: ScanResult }>(`/scanner/scans/${id}`)).scan,
   playbook: (id) => req(`/incidents/${id}/playbook`),
   setPlaybookStep: (id, key, completed) => req(`/incidents/${id}/playbook/${encodeURIComponent(key)}`, "PUT", { completed }),
   setBreach: (id, patch) => req(`/incidents/${id}/breach`, "PATCH", patch),

@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "verify-audit": "node dist/scripts/verifyAudit.js",
     "create-admin": "tsx src/scripts/createAdmin.ts",
-    "create-admin:prod": "node dist/scripts/createAdmin.js"
+    "create-admin:prod": "node dist/scripts/createAdmin.js",
+    "test": "node --import tsx --test src/lib/scanner/*.test.ts"
   },
   "engines": {
     "node": ">=20"
@@ -23,8 +24,10 @@
     "express": "^5.3.0",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
+    "node-html-parser": "^9.0.5",
     "pg": "^8.23.1",
     "qrcode": "^1.5.4",
+    "tldts": "^7.4.19",
     "zod": "^4.6.7",
     "zxcvbn": "^4.4.2"
   },

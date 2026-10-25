@@ -24,6 +24,7 @@ import consents from "./routes/consents";
 import incidents from "./routes/incidents";
 import phishing from "./routes/phishing";
 import requests from "./routes/requests";
+import scanner from "./routes/scanner";
 import selfcheck from "./routes/selfcheck";
 import soc from "./routes/soc";
 import users from "./routes/users";
@@ -65,6 +66,7 @@ app.use("/api/security", selfcheck); // public cookie probe + authenticated self
 app.use("/api", authenticate, csrfProtect);
 app.use("/api/soc", soc);
 app.use("/api/phishing", phishing);
+app.use("/api/scanner", scanner); // Website Scanner: every signed-in role
 app.use("/api/consents", consents);
 app.use("/api/requests", requests);
 app.use("/api/incidents", incidents);

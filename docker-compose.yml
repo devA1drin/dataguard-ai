@@ -13,6 +13,7 @@ services:
       - ./db/migrations/002_security.sql:/docker-entrypoint-initdb.d/03-security.sql:ro
       - ./db/migrations/003_security_seed.sql:/docker-entrypoint-initdb.d/04-security-seed.sql:ro
       - ./db/migrations/004_remove_demo_accounts.sql:/docker-entrypoint-initdb.d/05-remove-demo-accounts.sql:ro
+      - ./db/migrations/005_website_scans.sql:/docker-entrypoint-initdb.d/06-website-scans.sql:ro
       - pgdata:/var/lib/postgresql/data
     ports: ["5432:5432"]
     healthcheck:

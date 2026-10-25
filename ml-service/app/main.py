@@ -7,6 +7,7 @@ Endpoints
   POST /incidents/classify   TF-IDF + LogReg / RandomForest incident categories (both shown)
   POST /risk/forecast        trend analysis on daily counts (GET uses bundled synthetic counts)
   POST /assistant/ask        retrieval-grounded privacy assistant with citations
+  POST /phishing/analyze     phishing probability for a URL or e-mail + top contributing features
   GET  /metrics              evaluation results produced by training/run_all.py
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from .features import FEATURE_LABELS, build_features
 from .forecast import forecast
+from .phishing_features import email_features, url_features
 from .rag import PolicyRetriever
 
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +46,7 @@ class State:
     selected: str
     retriever: PolicyRetriever
     metrics: dict
+    phishing: dict
 
 
 S = State()
@@ -73,6 +76,7 @@ def load():
     S.metrics = json.loads((MODELS / "metrics.json").read_text())
     S.classifiers = {n: joblib.load(MODELS / f"incident_{n}.joblib") for n in ("logistic_regression", "random_forest")}
     S.selected = S.metrics["incident_classification"]["selected_model"]
+    S.phishing = {k: joblib.load(MODELS / f"phishing_{k}.joblib") for k in ("url", "email") if (MODELS / f"phishing_{k}.joblib").exists()}
     S.retriever = PolicyRetriever()
     log.info("ML service ready (RAG backend: %s)", S.retriever.backend)
 
@@ -113,6 +117,11 @@ class IncidentIn(BaseModel):
 class SeriesIn(BaseModel):
     series: list[dict]
     horizon: int = 14
+
+
+class PhishIn(BaseModel):
+    kind: Literal["url", "email"]
+    text: str = Field(min_length=4, max_length=20000)
 
 
 class AskIn(BaseModel):
@@ -206,6 +215,39 @@ def risk_forecast(body: SeriesIn):
 @app.post("/assistant/ask")
 def ask(body: AskIn):
     return S.retriever.ask(body.question)
+
+
+@app.post("/phishing/analyze")
+def phishing_analyze(body: PhishIn):
+    from scipy.sparse import csr_matrix, hstack
+    art = S.phishing.get(body.kind)
+    if art is None:
+        raise HTTPException(503, "phishing model not trained - run python -m training.train_phishing")
+    text = body.text.strip()
+    vec, scaler, model = art["vectorizer"], art["scaler"], art["model"]
+    raw_hand = (url_features if body.kind == "url" else email_features)(text)
+    hand = scaler.transform(np.array([raw_hand]))
+    x = hstack([vec.transform([text]), csr_matrix(hand)]).tocsr()
+    p = float(model.predict_proba(x)[0, 1])
+    # exact explanation for a linear model: contribution_i = coef_i * x_i (log-odds)
+    coef = model.coef_[0]
+    names = list(vec.get_feature_names_out()) + art["hand_features"]
+    n_text = len(names) - len(art["hand_features"])
+    idx = x.indices
+    contrib = [(names[i], float(coef[i] * x[0, i]), i >= n_text) for i in idx]
+    contrib.sort(key=lambda c: -abs(c[1]))
+    top = []
+    for name, c, is_hand in contrib[:8]:
+        label = f"{name} = {raw_hand[art['hand_features'].index(name)]:g}" if is_hand else (
+            f'contains "{name.strip()}"' if body.kind == "url" else f'word "{name}"')
+        top.append({"feature": label, "contribution": round(c, 4), "direction": "phishing" if c > 0 else "legitimate"})
+    label = "phishing" if p >= 0.5 else "suspicious" if p >= 0.3 else "likely_legitimate"
+    m = S.metrics.get("phishing_detection", {}).get(f"{body.kind}_model", {})
+    return {"kind": body.kind, "probability": round(p, 4), "label": label, "model": f"phishing_{body.kind}_logreg",
+            "intercept": round(float(model.intercept_[0]), 4), "top_features": top,
+            "attack": {"technique_id": "T1566", "name": "Phishing", "url": "https://attack.mitre.org/techniques/T1566/"},
+            "model_metrics": {k: m.get(k) for k in ("precision", "recall", "f1")},
+            "note": "Trained on SYNTHETIC examples only - decision support, not a verdict. Never click a link to 'test' it."}
 
 
 @app.get("/metrics")

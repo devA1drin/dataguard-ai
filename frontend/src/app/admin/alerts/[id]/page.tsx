@@ -1,4 +1,6 @@
 "use client";
+import { AttackBadge } from "@/components/security";
+import { accessAnomalyTechniques } from "@/lib/attack";
 import { CheckCircle2, ShieldAlert, XCircle, Info } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
@@ -47,7 +49,7 @@ export default function AlertDetailPage() {
     <>
       <PageHeader back={{ href: "/admin/alerts", label: "All alerts" }} title={`Alert #${d.id}`}
         description="Flagged by the anomaly model for human review. The explanation shows which features of this access event pushed its score up or down."
-        actions={<><RiskBadge score={d.risk_score} /><AlertStatusBadge status={d.status} /></>} />
+        actions={<>{accessAnomalyTechniques(d.export_flag).map((t) => <AttackBadge key={t} id={t} />)}<RiskBadge score={d.risk_score} /><AlertStatusBadge status={d.status} /></>} />
       <div className="grid gap-6 lg:grid-cols-[1fr_1.5fr]">
         <div className="space-y-6">
           <Card title="Access event">

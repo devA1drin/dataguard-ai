@@ -1,6 +1,7 @@
 "use client";
 import { Info } from "lucide-react";
 import { useState } from "react";
+import { AttackBadge } from "@/components/security";
 import { Badge, Card, ErrorBox, Loading, PageHeader, Stat, cx } from "@/components/ui";
 import { api } from "@/lib/api";
 import { humanize, pct } from "@/lib/format";
@@ -89,6 +90,28 @@ export default function ModelsPage() {
         ))}
       </div>
       <Card className="mt-4" title={`Confusion matrix — ${humanize(sel)}`} subtitle="Click a model above to switch"><MultiMatrix labels={cm.labels} cm={cm.confusion_matrix} /></Card>
+      {m.data.phishing_detection && <PhishingMetrics p={m.data.phishing_detection} />}
+    </>
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function PhishingMetrics({ p }: { p: any }) {
+  return (
+    <>
+      <h2 className="mt-10 flex items-center gap-3 text-lg font-semibold text-slate-900">Phishing detection <AttackBadge id="T1566" /></h2>
+      <p className="mt-1 max-w-4xl text-sm text-slate-600">Two logistic-regression models (one for URLs, one for email/SMS text). Held-out test-set results at threshold {p.threshold}.</p>
+      <div className="mt-3 flex gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-amber-200"><Info className="h-4 w-4 shrink-0" />{p.data_source}</div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        {(["url_model", "email_model"] as const).map((k) => { const r = p[k]; return (
+          <Card key={k} title={k === "url_model" ? "URL model" : "Email / SMS model"} subtitle={`${r.algorithm} · ${r.n_train.toLocaleString()} train / ${r.n_test.toLocaleString()} test`}>
+            <div className="mb-4 grid grid-cols-4 gap-2 text-center">
+              {[["Precision", r.precision], ["Recall", r.recall], ["F1", r.f1], ["ROC-AUC", r.roc_auc]].map(([l, v]) => (
+                <div key={l as string}><p className="text-lg font-semibold tabular-nums">{pct(v as number)}</p><p className="text-[11px] text-slate-500">{l}</p></div>))}
+            </div>
+            <BinaryMatrix cm={r.confusion_matrix} />
+          </Card>); })}
+      </div>
     </>
   );
 }

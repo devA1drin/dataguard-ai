@@ -1,4 +1,6 @@
 "use client";
+import { AttackBadge } from "@/components/security";
+import { INCIDENT_TECHNIQUE } from "@/lib/attack";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -59,7 +61,9 @@ export default function IncidentsPage() {
                 <Td className="text-slate-400">{i.id}</Td>
                 <Td><Link href={`/admin/incidents/${i.id}`} className="font-medium text-slate-900 hover:text-indigo-600">{i.title}</Link></Td>
                 <Td>{i.final_category ? <Badge tone="green">{humanize(i.final_category)}</Badge>
-                  : i.predicted_category ? <Badge tone="indigo">{humanize(i.predicted_category)} · ML {Math.round((i.category_confidence ?? 0) * 100)}%</Badge> : <Badge>Unclassified</Badge>}</Td>
+                  : i.predicted_category ? <Badge tone="indigo">{humanize(i.predicted_category)} · ML {Math.round((i.category_confidence ?? 0) * 100)}%</Badge> : <Badge>Unclassified</Badge>}
+                  {" "}<AttackBadge id={INCIDENT_TECHNIQUE[i.final_category ?? i.predicted_category ?? ""] ?? null} compact />
+                  {i.personal_data_breach && !i.npc_notified_at && <Badge tone="red" className="ml-1">NPC 72h</Badge>}</Td>
                 <Td><SeverityBadge severity={i.severity} /></Td>
                 <Td><StatusBadge status={i.status} /></Td>
                 <Td className="text-slate-600">{i.assignee ?? <span className="text-slate-400">Unassigned</span>}</Td>

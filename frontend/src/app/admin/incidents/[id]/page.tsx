@@ -3,6 +3,9 @@ import { BrainCircuit, CheckSquare, MessageSquare, Square, UserCheck, ArrowRight
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
+import { PlaybookPanel } from "@/components/Playbook";
+import { AttackBadge } from "@/components/security";
+import { INCIDENT_TECHNIQUE } from "@/lib/attack";
 import { Badge, Button, Card, ErrorBox, Loading, PageHeader, SeverityBadge, StatusBadge, cx, inputCls } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -34,10 +37,11 @@ export default function IncidentDetailPage() {
     <>
       <PageHeader back={{ href: "/admin/incidents", label: "All incidents" }} title={inc.title}
         description={<>Incident #{inc.id} · reported {fmtDateTime(inc.reported_at)}{inc.reporter && ` by ${inc.reporter}`}{inc.related_alert_id && <> · from <Link className="text-indigo-600 hover:underline" href={`/admin/alerts/${inc.related_alert_id}`}>alert #{inc.related_alert_id}</Link></>}</>}
-        actions={<><SeverityBadge severity={inc.severity} /><StatusBadge status={inc.status} /></>} />
+        actions={<><AttackBadge id={INCIDENT_TECHNIQUE[inc.final_category ?? inc.predicted_category ?? ""] ?? null} /><SeverityBadge severity={inc.severity} /><StatusBadge status={inc.status} /></>} />
       <div className="grid gap-6 lg:grid-cols-[1.6fr_1fr]">
         <div className="space-y-6">
           <Card title="Description"><p className="text-sm leading-relaxed text-slate-700">{inc.description}</p></Card>
+          <PlaybookPanel key={inc.final_category ?? "none"} incidentId={inc.id} canEdit={canEdit} />
           <Card title="Corrective actions" subtitle={`${corrective.filter((a) => a.completed).length} of ${corrective.length} completed`}>
             {!corrective.length ? <p className="text-sm text-slate-500">No corrective actions yet.</p> : (
               <ul className="space-y-2">

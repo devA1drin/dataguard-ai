@@ -81,18 +81,23 @@ function recomputeKpis(s: DemoState) {
 const words = (t: string) => new Set(t.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2));
 
 export const demoApi: Api = {
-  async login(email) {
-    const s = load();
-    const u = Object.values(s.sessions).find((x) => email.toLowerCase().startsWith(x.role === "executive" ? "exec" : x.role));
-    if (!u) throw new Error("Demo mode: use the role picker below");
-    return this.demoLogin!(u.role);
+  // Demo mode has no accounts and no passwords: visitors pick a role (stored in this browser only).
+  async me() {
+    const raw = typeof window !== "undefined" ? localStorage.getItem(SESSION_KEY) : null;
+    return raw ? (JSON.parse(raw) as SessionUser) : null;
+  },
+  async login() {
+    throw new Error("Demo mode: choose a role below - no password is needed.");
+  },
+  async logout() {
+    localStorage.removeItem(SESSION_KEY);
   },
   async demoLogin(role) {
     const user = load().sessions[role];
     localStorage.setItem(SESSION_KEY, JSON.stringify(user));
     await audit("auth.login", "user", user.id, { demo: true });
     save();
-    return { token: `demo-${role}`, user };
+    return { user };
   },
   consents: async () => delay(load().consents),
   consentHistory: async () => delay(load().consentHistory),

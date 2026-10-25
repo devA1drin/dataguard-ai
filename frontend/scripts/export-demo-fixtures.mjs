@@ -13,23 +13,61 @@ import { writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const API = args.includes("--api") ? args[args.indexOf("--api") + 1] : "http://localhost:4000";
-const PASSWORD = "DemoPass123!";
 
-async function call(token, path, method = "GET", body) {
-  const res = await fetch(`${API}/api${path}`, {
-    method, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${await res.text()}`);
-  return res.json();
+// No shared demo passwords exist any more. Pass your OWN local accounts via env vars:
+//   DG_ADMIN_EMAIL / DG_ADMIN_PASSWORD [/ DG_ADMIN_MFA_CODE]   an admin (create one with `npm run create-admin`)
+//   DG_CUSTOMER_EMAIL / DG_CUSTOMER_PASSWORD                    optional; otherwise a throwaway customer is signed up
+const env = (k) => process.env[k] || "";
+if (!env("DG_ADMIN_EMAIL") || !env("DG_ADMIN_PASSWORD")) {
+  console.error("Set DG_ADMIN_EMAIL and DG_ADMIN_PASSWORD (a local admin account). See README > First admin.");
+  process.exit(1);
 }
-const login = async (email) => call(null, "/auth/login", "POST", { email, password: PASSWORD });
 
-const sessions = {};
-for (const [role, email] of Object.entries({
-  customer: "customer@dataguard.demo", dpo: "dpo@dataguard.demo", security: "security@dataguard.demo",
-  admin: "admin@dataguard.demo", executive: "exec@dataguard.demo" })) sessions[role] = await login(email);
-const T = Object.fromEntries(Object.entries(sessions).map(([k, v]) => [k, v.token]));
+/** Minimal cookie session: keeps the session cookie + CSRF token like the browser does. */
+class Session {
+  cookie = ""; csrf = ""; user = null;
+  async call(path, method = "GET", body) {
+    const res = await fetch(`${API}/api${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", ...(this.cookie ? { Cookie: this.cookie } : {}), ...(this.csrf && method !== "GET" ? { "x-csrf-token": this.csrf } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const set = res.headers.getSetCookie?.() ?? [];
+    for (const c of set) if (/dg_session=/.test(c)) this.cookie = c.split(";")[0];
+    if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${await res.text()}`);
+    const data = await res.json();
+    if (data?.csrfToken) this.csrf = data.csrfToken;
+    if (data?.user) this.user = data.user;
+    return data;
+  }
+  async login(email, password, mfaCode) {
+    const r = await this.call("/auth/login", "POST", { email, password });
+    if (r.mfa_required) {
+      if (!mfaCode) throw new Error(`${email} has MFA on: set DG_ADMIN_MFA_CODE to a current code`);
+      await this.call("/auth/mfa/verify", "POST", { mfa_token: r.mfa_token, code: mfaCode });
+    }
+    return this;
+  }
+}
+
+const admin = await new Session().login(env("DG_ADMIN_EMAIL"), env("DG_ADMIN_PASSWORD"), env("DG_ADMIN_MFA_CODE"));
+const customer = new Session();
+if (env("DG_CUSTOMER_EMAIL")) await customer.login(env("DG_CUSTOMER_EMAIL"), env("DG_CUSTOMER_PASSWORD"));
+else await customer.call("/auth/signup", "POST", {
+  full_name: "Sample Customer (export)", email: `export.${Date.now()}@sample.dataguard.example`,
+  password: `Export-${crypto.randomUUID()}-Fixture`,
+});
+// Admin can do everything the DPO / security / executive roles can, so one staff session is enough.
+const S = { customer, dpo: admin, security: admin, admin, executive: admin };
+const call = (who, ...rest) => who.call(...rest);
+const T = S;
+const sessionUsers = {
+  customer: customer.user,
+  dpo: { ...admin.user, role: "dpo", full_name: "Sample DPO" },
+  security: { ...admin.user, role: "security", full_name: "Sample Security Analyst" },
+  admin: admin.user,
+  executive: { ...admin.user, role: "executive", full_name: "Sample Executive" },
+};
 
 if (args.includes("--with-activity")) {
   console.log("performing demo activity through the API ...");
@@ -55,7 +93,7 @@ if (args.includes("--with-activity")) {
     await call(T.dpo, `/incidents/${inc.id}/actions`, "POST", { action_type: "note", content: "Triage complete. Collected access logs for the affected period." });
     await call(T.security, `/incidents/${inc.id}/actions`, "POST", { action_type: "corrective_action", content: "Revoke export permission pending manager approval and enable MFA on the CRM account." });
   }
-  await call(T.admin, "/users", "POST", { email: "mika.security@dataguard.demo", full_name: "Mika Torres (Security)", role: "security", password: `Tmp-${crypto.randomUUID()}` });
+  await call(T.admin, "/users", "POST", { email: `mika.security.${Date.now()}@sample.dataguard.example`, full_name: "Mika Torres (Security)", role: "security", password: `Tmp-${crypto.randomUUID()}` });
   await call(T.dpo, "/audit-logs/verify");
 }
 
@@ -83,7 +121,7 @@ for (const q of QUESTIONS) assistant.push({ question: q, ...(await call(T.custom
 const fixtures = {
   generated_at: new Date().toISOString(),
   note: "Exported from a running DataGuard AI stack using SYNTHETIC data. Demo mode only.",
-  sessions: Object.fromEntries(Object.entries(sessions).map(([k, v]) => [k, v.user])),
+  sessions: sessionUsers,
   consents: (await call(T.customer, "/consents/me")).consents,
   consentHistory: (await call(T.customer, "/consents/me/history")).history,
   myRequests: (await call(T.customer, "/requests/me")).requests,

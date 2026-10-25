@@ -9,6 +9,10 @@ services:
     volumes:
       - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      # additive security migrations (sessions, MFA, sign-in monitoring, playbooks, sample threat intel)
+      - ./db/migrations/002_security.sql:/docker-entrypoint-initdb.d/03-security.sql:ro
+      - ./db/migrations/003_security_seed.sql:/docker-entrypoint-initdb.d/04-security-seed.sql:ro
+      - ./db/migrations/004_remove_demo_accounts.sql:/docker-entrypoint-initdb.d/05-remove-demo-accounts.sql:ro
       - pgdata:/var/lib/postgresql/data
     ports: ["5432:5432"]
     healthcheck:
@@ -39,6 +43,13 @@ services:
       ALERT_THRESHOLD: ${ALERT_THRESHOLD:-0.5}
       SIMULATE_ACCESS_LOGS: ${SIMULATE_ACCESS_LOGS:-true}
       SIMULATE_INTERVAL_MS: ${SIMULATE_INTERVAL_MS:-20000}
+      # whoever signs up with this e-mail while no admin exists becomes the first admin
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      MFA_ENC_KEY: ${MFA_ENC_KEY:-}
+      # plain http on localhost -> cookies can't be "Secure"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      TRUST_PROXY: ${TRUST_PROXY:-loopback}
+      SELF_CHECK_URL: ${SELF_CHECK_URL:-http://frontend:3000}
     ports: ["4000:4000"]
     depends_on:
       postgres: { condition: service_healthy }

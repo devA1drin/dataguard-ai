@@ -9,9 +9,11 @@ overview, start with the [main README](../README.md).
 - [Running without Docker](#running-without-docker)
 - [Live deployment on Vercel](#live-deployment-on-vercel)
 - [Demo mode / Vercel](#demo-mode--vercel)
-- [Demo accounts](#demo-accounts)
+- [Accounts and the first admin](#accounts-and-the-first-admin)
+- [Environment variables](#environment-variables)
 - [Feature → code map](#feature--code-map)
 - [ML methodology & evaluation](#ml-methodology--evaluation)
+- [Cybersecurity module](#cybersecurity-module)
 - [API reference](#api-reference)
 - [Database schema](#database-schema)
 - [Security & privacy design](#security--privacy-design)
@@ -39,7 +41,14 @@ overview, start with the [main README](../README.md).
 - Model performance: precision, recall, F1, false-positive rate, ROC-AUC, confusion matrices, a
   comparison of the two classifiers and recall per anomaly pattern
 - Audit-log viewer with **hash-chain verification**
-- User and role management with a permission matrix
+- User and role management with a permission matrix; unlock and delete accounts
+- **Security operations (security, DPO, admin):** SOC dashboard with posture score, sign-in threat
+  monitoring with detection rules and a SAMPLE threat-intel list, MITRE ATT&CK badges, phishing
+  detector, incident playbooks with the NPC 72-hour clock, and a security self-check of the site's headers
+
+**Every account: My security**
+- Optional TOTP MFA (QR code + 10 one-time backup codes), password change, active sessions with
+  "sign out other sessions", and personal sign-in history
 - Real-time alerts: the backend scores new access events as they arrive and pushes new alerts to
   the console over Server-Sent Events
 
@@ -51,8 +60,8 @@ flowchart LR
     FE["Next.js frontend<br/>(customer portal + admin console)"]
   end
   subgraph Backend["Express API (TypeScript)"]
-    AUTH["JWT auth + bcrypt<br/>RBAC guards"]
-    ROUTES["consents · requests · incidents<br/>alerts · access-logs · users · audit"]
+    AUTH["Server-side sessions (httpOnly cookie)<br/>CSRF · bcrypt · TOTP MFA · RBAC"]
+    ROUTES["consents · requests · incidents<br/>alerts · access-logs · users · audit<br/>soc · phishing · self-check"]
     AUDIT["Hash-chained audit writer"]
     JOB["Scoring job + simulator<br/>(every 10 s)"]
     SSE["SSE /alerts/stream"]
@@ -63,11 +72,12 @@ flowchart LR
     RISK["/risk/forecast<br/>rolling mean + OLS trend"]
     RAG["/assistant/ask<br/>MiniLM + FAISS (TF-IDF fallback)"]
     MET["/metrics"]
+    PH["/phishing/analyze<br/>TF-IDF + LogReg (URL, e-mail)"]
   end
-  DB[("PostgreSQL<br/>users · customers · consents · consent_history<br/>data_requests · access_logs · alerts · incidents<br/>incident_actions · audit_logs · model_predictions")]
+  DB[("PostgreSQL<br/>users · customers · consents · consent_history<br/>data_requests · access_logs · alerts · incidents<br/>incident_actions · audit_logs · model_predictions<br/>sessions · mfa_backup_codes · login_attempts<br/>security_alerts · threat_intel · incident_playbook_steps")]
   TRAIN["training/run_all.py<br/>generate → train → evaluate → metrics.json"]
 
-  FE -- "REST + Bearer JWT" --> AUTH --> ROUTES
+  FE -- "REST + session cookie + x-csrf-token" --> AUTH --> ROUTES
   FE -- "EventSource" --> SSE
   ROUTES --> AUDIT --> DB
   ROUTES --> DB
@@ -93,8 +103,9 @@ dataguard-ai/
 ## Quick start (Docker)
 
 ```bash
-cp .env.example .env        # change JWT_SECRET
+cp .env.example .env        # change JWT_SECRET, set ADMIN_EMAIL to your e-mail
 docker compose up --build
+# open http://localhost:3000/signup and sign up with ADMIN_EMAIL -> you are the first admin
 ```
 
 | Service | URL |
@@ -106,7 +117,7 @@ docker compose up --build
 
 What happens when the stack starts:
 - The ML image generates the synthetic data, then trains and evaluates the models during `docker build` (about 10 s). It also tries to cache the MiniLM embedding model.
-- Postgres runs `db/init.sql` and then `db/seed.sql`. Seed timestamps are relative to load time, so the data always looks recent.
+- Postgres runs `db/init.sql`, `db/seed.sql`, then the migrations in `db/migrations/` (002 security tables, 003 synthetic sign-in history + SAMPLE threat intel, 004 removes the old demo logins). There are **no login accounts** afterwards. Seed timestamps are relative to load time, so the data always looks recent.
 - The backend scores the roughly 1,900 seeded access events through the ML service, which creates about 100 alerts. It also classifies the seeded incidents. A simulator then adds a synthetic access event every 20 s (set `SIMULATE_ACCESS_LOGS=false` to turn it off).
 
 To reset everything, run `docker compose down -v`.
@@ -129,9 +140,11 @@ createuser dataguard -P   # password: dataguard
 createdb -O dataguard dataguard
 python ../db/build_seed.py          # optional: regenerate seed.sql from data/generated
 psql -U dataguard -h localhost dataguard -f ../db/init.sql -f ../db/seed.sql
+for f in ../db/migrations/00*.sql; do psql -U dataguard -h localhost dataguard -v ON_ERROR_STOP=1 -f "$f"; done
 
 # 3) Backend
 cd ../backend && npm install && npm run build && npm start      # :4000
+npm run create-admin                                            # first admin (or use ADMIN_EMAIL + sign-up)
 
 # 4) Frontend
 cd ../frontend && npm install && npm run build && npm start      # :3000
@@ -143,7 +156,7 @@ Useful commands:
 
 ## Live deployment on Vercel
 
-**Live app:** https://dataguard-ai-roan.vercel.app. This is the full stack, not demo mode. Sign in with the demo accounts below.
+**Live app:** https://dataguard-ai-roan.vercel.app. This is the full stack, not demo mode. Customers sign up on `/signup`; staff accounts are created by an admin.
 
 The root `vercel.json` deploys three [Vercel Services](https://vercel.com/docs/services) together as one atomic deployment:
 
@@ -153,13 +166,13 @@ The root `vercel.json` deploys three [Vercel Services](https://vercel.com/docs/s
 | `backend` | `backend/` | Express as a Vercel Function (entrypoint `src/app.ts`) | `/api/*` |
 | `ml` | `ml-service/` | FastAPI as a Python Function (entrypoint `app/main.py`) | **none.** It is private and reachable only through a service binding (`ML_SERVICE_URL`) from the backend. |
 
-The database is **Neon Postgres** (Vercel Marketplace, free plan). The integration provides `DATABASE_URL`, the pooled connection with SSL. Schema and seed are the same `db/init.sql` and `db/seed.sql` used by Docker.
+The database is **Neon Postgres** (Vercel Marketplace, free plan). The integration provides `DATABASE_URL`, the pooled connection with SSL. Schema and seed are the same `db/init.sql` and `db/seed.sql` used by Docker, followed by the additive migrations in `db/migrations/` (each is idempotent: `IF NOT EXISTS` / `ON CONFLICT`).
 
 How the serverless deployment differs from `docker compose`:
-- **Scoring.** There are no in-process timers. Events are scored immediately on `POST /api/access-logs/ingest` and on `POST /api/access-logs/simulate` (the *Simulate 5 events* button on *Access logs*). Anything left unscored is handled by `GET /api/cron/score`, which a daily Vercel Cron calls with `Authorization: Bearer $CRON_SECRET`. Security and admin users can also call it with their JWT.
+- **Scoring.** There are no in-process timers. Events are scored immediately on `POST /api/access-logs/ingest` and on `POST /api/access-logs/simulate` (the *Simulate 5 events* button on *Access logs*). Anything left unscored is handled by `GET /api/cron/score`, which a daily Vercel Cron calls with `Authorization: Bearer $CRON_SECRET`. Security and admin users can also call it with their session.
 - **Live alerts.** The browser polls `GET /api/alerts/latest` every 15 s (`NEXT_PUBLIC_ALERT_TRANSPORT=poll`) instead of using SSE. SSE remains the default for Docker.
 - **ML service.** It is stateless. It loads the trained `models/*.joblib` artifacts that are bundled with the deployment, so train them before deploying (`python -m training.run_all`). The assistant uses TF-IDF retrieval (`RAG_BACKEND=tfidf`) over the policy documents copied to `ml-service/policies/`. Off-topic questions are refused. `sentence-transformers`, `faiss`, `torch` and `uvicorn` live in `requirements-extras.txt`, which only the Docker image installs. This keeps the Python function at about 250 MB.
-- **Configuration.** `JWT_SECRET` and `CRON_SECRET` are random secrets stored as Vercel environment variables. The backend refuses to start on Vercel without `JWT_SECRET`. Other settings: `NEXT_PUBLIC_API_URL=/` (same origin), `NEXT_PUBLIC_DEMO_MODE=false`, `SIMULATE_ACCESS_LOGS=false`.
+- **Configuration.** `JWT_SECRET` (signs CSRF tokens, derives the MFA encryption key unless `MFA_ENC_KEY` is set) and `CRON_SECRET` are random secrets stored as Vercel environment variables. The backend refuses to start on Vercel without `JWT_SECRET`. `ADMIN_EMAIL` bootstraps the first admin. On Vercel, cookies are `Secure` with the `__Host-` prefix and `trust proxy` is on. Other settings: `NEXT_PUBLIC_API_URL=/` (same origin), `NEXT_PUBLIC_DEMO_MODE=false`, `SIMULATE_ACCESS_LOGS=false`.
 
 Deploy from the repository root with an authenticated Vercel CLI:
 
@@ -171,8 +184,12 @@ vercel deploy --prod
 Verify a deployment end-to-end, including logins, scoring, SHAP, review, assistant, audit chain and RBAC, with 1440px screenshots:
 
 ```bash
-python scripts/verify_live.py https://dataguard-ai-roan.vercel.app screenshots/live
+DG_ADMIN_EMAIL=you@example.com DG_ADMIN_PASSWORD='...' DG_ADMIN_TOTP_SECRET='...' \
+  python scripts/verify_live.py https://dataguard-ai-roan.vercel.app screenshots/live
 ```
+
+It signs up a throwaway customer (`verify.<timestamp>@example.com`, printed at the end; delete it
+under *Users & roles*) and signs in with your admin. The TOTP secret is only needed if that admin uses MFA.
 
 Plan notes: the Hobby plan limits crons to once per day and functions to 300 s. Neon's free plan auto-suspends when idle, so the first request after a pause takes about 1 s longer.
 
@@ -195,18 +212,50 @@ How demo mode behaves:
 
 **Static demo on Vercel:** create a project with Root Directory `frontend` and set `NEXT_PUBLIC_DEMO_MODE=true`. Nothing else is needed. The live deployment described above does **not** use demo mode.
 
-## Demo accounts
+## Accounts and the first admin
 
-> **Demo only.** These credentials are public, so never reuse them. Change `JWT_SECRET` and remove these accounts in any real deployment.
+There are **no seeded login accounts and no shared password**. Migration `004_remove_demo_accounts.sql`
+deletes the old `*@dataguard.demo` users (their audit history stays; references are set to NULL).
 
-| Role | Email | Password |
+- **Customers** sign up at `/signup` (`POST /api/auth/signup`). Sign-up always creates a `customer`
+  user plus a new customer record with every consent off. An e-mail that already belongs to a
+  synthetic customer record or a user is refused with 409. Sign-ups are limited per IP per hour.
+- **Staff can't self-register.** An admin creates staff under *Users & roles* (`POST /api/users`,
+  roles dpo / security / admin / executive only). Customers can't be turned into staff or the reverse.
+- **First admin**, two ways:
+  1. `ADMIN_EMAIL=you@example.com`: while **no admin exists**, a sign-up with exactly that e-mail
+     becomes `admin` (audited as `auth.bootstrap_admin`). After that the variable has no effect.
+  2. `npm run create-admin [-- email]` in `backend/` (or `npm run create-admin:prod` from a build /
+     `docker compose exec backend npm run create-admin:prod`). Asks for name and a hidden password,
+     applies the same password policy, creates or promotes the user, and writes `user.create_admin_cli`
+     to the audit log. Works with piped input too.
+- **E-mail verification and password-reset e-mails are not implemented**: they need an e-mail
+  provider, and none is available for free in this deployment. This is a known gap.
+- **Demo mode** (frontend only, `NEXT_PUBLIC_DEMO_MODE=true`) still has a role picker. It has no
+  credentials at all, because nothing leaves the browser.
+
+## Environment variables
+
+Backend (see `.env.example`):
+
+| Variable | Default | Purpose |
 |---|---|---|
-| Customer | `customer@dataguard.demo` | `DemoPass123!` |
-| Customer (2nd) | `customer2@dataguard.demo` | `DemoPass123!` |
-| Data Protection Officer | `dpo@dataguard.demo` | `DemoPass123!` |
-| Security analyst | `security@dataguard.demo` | `DemoPass123!` |
-| System admin | `admin@dataguard.demo` | `DemoPass123!` |
-| Executive (read-only) | `exec@dataguard.demo` | `DemoPass123!` |
+| `DATABASE_URL` | local postgres | Postgres connection |
+| `JWT_SECRET` | dev default (refused on Vercel) | HMAC key for CSRF tokens; MFA key derivation |
+| `MFA_ENC_KEY` | derived from `JWT_SECRET` | Separate AES-256-GCM key for TOTP secrets at rest |
+| `ADMIN_EMAIL` | empty | First-admin bootstrap via sign-up |
+| `SESSION_HOURS` | 8 | Session lifetime (cookie and server row) |
+| `LOCK_THRESHOLD` / `LOCK_MINUTES` | 5 / 10 | Account lockout after N consecutive failures |
+| `LOGIN_IP_FAIL_LIMIT` | 20 | Max failed sign-ins per IP per 15 min (429 after) |
+| `COOKIE_SECURE` | true on Vercel, else false | `Secure` + `__Host-` cookie prefix |
+| `TRUST_PROXY` | `true` on Vercel, else `loopback` | Express trust proxy (so `X-Forwarded-For` can't be spoofed) |
+| `CORS_ORIGIN` | `http://localhost:3000` | Allowed browser origins (comma-separated, credentials on) |
+| `SELF_CHECK_URL` | this deployment | Comma-separated URLs the self-check may scan (allow-list, no SSRF) |
+| `ML_SERVICE_URL`, `ALERT_THRESHOLD`, `SIMULATE_*`, `CRON_SECRET` | | as before |
+
+Frontend: `NEXT_PUBLIC_API_URL` (`/` for same origin), `NEXT_PUBLIC_ALERT_TRANSPORT` (`poll` or SSE),
+`NEXT_PUBLIC_DEMO_MODE`, and optional `API_PROXY_URL` (build-time rewrite of `/api/*` to a backend,
+useful for local same-origin testing).
 
 ## Feature → code map
 
@@ -216,7 +265,17 @@ How demo mode behaves:
 | Sample privacy policies | `data/policies/*.md` |
 | Schema (11 tables) + append-only trigger | `db/init.sql` |
 | Seed (demo users with bcrypt hashes, recent logs, incidents, requests) | `db/build_seed.py` → `db/seed.sql` |
-| JWT login, bcrypt, RBAC guards | `backend/src/routes/auth.ts`, `backend/src/lib/auth.ts` |
+| Sessions, CSRF, lockout, RBAC guards | `backend/src/routes/auth.ts`, `backend/src/lib/auth.ts` |
+| Password policy (zxcvbn ≥ 3, 12+ chars) | `backend/src/lib/password.ts`, `frontend/src/components/security.tsx` |
+| TOTP MFA + backup codes, AES-GCM at rest | `backend/src/lib/totp.ts`, `backend/src/lib/crypto.ts`, `frontend/src/components/MySecurity.tsx` |
+| Sign-up + first-admin bootstrap | `POST /api/auth/signup`, `backend/src/scripts/createAdmin.ts`, `frontend/src/app/signup` |
+| Detection rules + SAMPLE threat intel | `backend/src/lib/detect.ts`, `db/build_security_seed.py` → `db/migrations/003_security_seed.sql` |
+| SOC dashboard, threats, feed, simulator | `backend/src/routes/soc.ts`, `frontend/src/app/admin/soc`, `frontend/src/app/admin/threats` |
+| Phishing detector | `ml-service/training/train_phishing.py`, `ml-service/app/phishing_features.py`, `backend/src/routes/phishing.ts`, `frontend/src/app/admin/phishing` |
+| IR playbooks + NPC 72-h clock | `backend/src/lib/playbooks.ts`, `backend/src/routes/incidents.ts`, `frontend/src/components/Playbook.tsx` |
+| ATT&CK mapping | `frontend/src/lib/attack.ts` |
+| Security self-check | `backend/src/routes/selfcheck.ts`, `frontend/src/app/admin/self-check` |
+| Security headers / CSP | `backend/src/app.ts` (helmet), `frontend/src/proxy.ts` (per-request nonce CSP) |
 | Consents + history | `backend/src/routes/consents.ts`, `frontend/src/app/portal/consents` |
 | Data-rights requests (customer + DPO) | `backend/src/routes/requests.ts`, `frontend/src/app/portal/requests`, `frontend/src/app/admin/requests` |
 | Privacy assistant (RAG, citations, refusal) | `ml-service/app/rag.py`, `frontend/src/app/portal/assistant` |
@@ -320,10 +379,85 @@ whether they agree. The suggestion is only advisory, and a reviewer sets the con
   - In-scope questions about consent, retention, deletion, sharing, the DPO and breaches scored 0.52–0.76 and were answered from the right section.
   - Off-topic questions ("best pizza in Makati", "weather tomorrow") scored 0.03–0.08 and were refused.
 
+## Cybersecurity module
+
+### Authentication hardening
+- **Sessions:** a random 256-bit session id in an `HttpOnly; SameSite=Strict; Path=/` cookie (`__Host-dg_session`
+  with `Secure` on HTTPS). Only its SHA-256 is stored in `sessions`, with user agent, masked IP, MFA flag,
+  `last_seen_at` and `revoked_at`. Logout, password change, "sign out other sessions" and disabling a user revoke rows.
+- **CSRF:** unsafe methods need `x-csrf-token = HMAC(JWT_SECRET, "csrf:" + session id)`, returned in the JSON of
+  login / me / sign-up and kept in memory by the frontend. Browser requests with a foreign `Origin` are also rejected.
+- **Passwords:** bcrypt cost 12; 12–128 characters and zxcvbn score ≥ 3 (user inputs such as name and e-mail
+  are penalised). The same check runs in the browser (meter) and on the server.
+- **Lockout and rate limit:** 5 consecutive failures lock the account for 10 minutes (HTTP 423; admins can unlock).
+  More than 20 failures per (masked) IP in 15 minutes → HTTP 429. Unknown e-mails run a dummy bcrypt compare so
+  timing doesn't reveal which accounts exist. *Trade-off:* the 423 message itself reveals that a locked account exists.
+- **MFA:** RFC 6238 TOTP (SHA-1, 30 s, 6 digits, ±1 step drift, replay of a used step refused). The secret is
+  AES-256-GCM encrypted at rest. Login with MFA returns a short-lived `mfa_token`; `POST /api/auth/mfa/verify`
+  accepts a TOTP or one of 10 single-use backup codes (stored as SHA-256). Disabling MFA or regenerating codes
+  needs the password plus a current code.
+- **Headers:** helmet on the API (`default-src 'none'`, no framing). The Next.js proxy (`src/proxy.ts`) sets a
+  per-request nonce CSP: `script-src 'self' 'nonce-…' 'strict-dynamic'`, `style-src 'self' 'unsafe-inline'`
+  (inline style attributes in charts), `img-src 'self' data: blob:`, `connect-src 'self'` (+ API origin),
+  `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus HSTS (HTTPS only),
+  `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` and COOP. Because the nonce changes
+  per request, every page is rendered dynamically.
+
+### Detection rules (every sign-in attempt is stored in `login_attempts` with a masked IP)
+
+| Rule | Condition | ATT&CK | Severity |
+|---|---|---|---|
+| `brute_force` | ≥ 5 failures for one account in 10 min | T1110.001 Password Guessing | high (critical if the IP is listed) |
+| `password_spraying` | ≥ 5 different accounts failing from one IP in 10 min | T1110.003 Password Spraying | high |
+| `threat_intel_match` | IP on the SAMPLE threat-intel list | T1078 (success) / T1110 (failure) | critical / medium |
+| `impossible_travel` | > 900 km/h between two successful sign-ins | T1078 Valid Accounts | high |
+| `new_device` | first success from an unseen browser fingerprint | T1078 Valid Accounts | low |
+| `account_lockout` | account locked | T1110 Brute Force | medium |
+
+Alerts are de-duplicated per rule/account/IP for a short window and reviewed by a person
+(`flagged_for_review` → `confirmed` or `false_positive`, audited). The **threat-intel list is SAMPLE
+data** made of RFC 5737 documentation-only addresses (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24), and the
+"locations" of sign-ins are approximate placeholders; there is no real geolocation database. Anomaly
+(access-log) alerts map to T1213 Data from Information Repositories, plus T1567 Exfiltration Over Web
+Service when data was exported. Incident categories map to: phishing T1566, unauthorized access T1078,
+data leak T1567, misconfiguration T1530, policy violation T1213, lost device (no technique).
+
+### SOC posture score
+Weighted average (0–100, grade A ≥ 90 … F < 60) of transparent checks, each with a tip on the page:
+staff accounts with MFA (25), alerts reviewed in 30 days (20), no open high/critical security alerts (20),
+audit hash chain intact (15), no accounts currently locked (10), no sign-ins from listed IPs in 24 h (10).
+
+### Phishing detector
+`ml-service/training/train_phishing.py` (seed 7, called by `run_all`). URL model: character 3–5-gram TF-IDF +
+14 URL features → Logistic Regression. E-mail model: word 1–2-gram TF-IDF + 6 text features → Logistic
+Regression. Explanations = coefficient × feature value. 3 % label noise and ambiguous hard cases are injected.
+
+| Model | Precision | Recall | F1 | ROC AUC | Confusion (TN/FP/FN/TP) | Train / test |
+|---|---|---|---|---|---|---|
+| URL | 0.965 | 0.936 | 0.951 | 0.958 | 481 / 17 / 32 / 470 | 3,000 / 1,000 |
+| E-mail | 0.968 | 0.957 | 0.963 | 0.970 | 363 / 12 / 16 / 359 | 2,250 / 750 |
+
+**Honest caveat:** all examples are synthetic and the same templates appear in train and test, so the scores
+measure recognition of these patterns, not generalisation to new campaigns. No real corpus is used.
+
+### Incident response playbooks and the NPC clock
+Each incident category has a 4-phase playbook (contain, eradicate, recover, lessons learned) defined in
+`backend/src/lib/playbooks.ts`. Ticking a step stores who and when in `incident_playbook_steps` and writes
+`incident.playbook_step` to the audit log. Marking an incident as a **personal-data breach** sets
+`breach_discovered_at`; the UI counts down 72 hours (NPC Circular 16-03, Sec. 17(A)) and records when the NPC
+was notified. This is a teaching aid, not legal advice.
+
+### Security self-check
+`POST /api/security/self-check` (REVIEWERS) scans an **allow-listed** URL (`SELF_CHECK_URL`, defaults to this
+deployment) and grades: HTTPS/TLS version, certificate expiry, HTTP→HTTPS redirect, HSTS, CSP, clickjacking
+protection, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, COOP, no `X-Powered-By`,
+session-cookie flags (via `/api/security/cookie-probe`) and API lock-down headers.
+
 ## API reference
 
 All backend routes are under `/api` and are implemented in `backend/src/routes/`. Every route except
-`/api/health`, `/api/auth/login` and `/api/cron/*` needs `Authorization: Bearer <JWT>`. Role groups
+`/api/health`, `/api/auth/signup|login|mfa/verify`, `/api/security/cookie-probe` and `/api/cron/*` needs the
+session cookie; state-changing requests also need the `x-csrf-token` header. Role groups
 are defined in `backend/src/lib/auth.ts`:
 - **STAFF:** dpo, security, admin, executive
 - **REVIEWERS:** dpo, security, admin
@@ -331,8 +465,21 @@ are defined in `backend/src/lib/auth.ts`:
 | Method & path | Who | Purpose |
 |---|---|---|
 | `GET /api/health` | public | Liveness, DB check and runtime (`server` or `vercel`) |
-| `POST /api/auth/login` | public | Email + password → JWT and user |
-| `GET /api/auth/me` | any signed-in user | Current user |
+| `POST /api/auth/signup` | public | Create a customer account (or the first admin if `ADMIN_EMAIL` matches and no admin exists) |
+| `POST /api/auth/login` | public | E-mail + password → session cookie + `csrfToken`, or `{mfa_required, mfa_token}` |
+| `POST /api/auth/mfa/verify` | public (with `mfa_token`) | TOTP or backup code → session |
+| `GET /api/auth/me` · `POST /api/auth/logout` | any signed-in user | Current user + CSRF token; sign out |
+| `GET /api/auth/sessions` · `DELETE /api/auth/sessions/:id` · `POST /api/auth/sessions/revoke-others` | any signed-in user | Own sessions |
+| `GET /api/auth/login-history` · `POST /api/auth/password` | any signed-in user | Own sign-in attempts; change password |
+| `GET /api/auth/mfa` · `POST /api/auth/mfa/setup|enable|disable|backup-codes` | any signed-in user | MFA management |
+| `GET /api/soc/overview` · `GET /api/soc/feed` | REVIEWERS | SOC stats, posture, chart, top accounts/IPs, live feed |
+| `GET /api/soc/security-alerts` · `PATCH /api/soc/security-alerts/:id/review` | REVIEWERS | Sign-in security alerts and their review |
+| `GET /api/soc/login-attempts` · `GET /api/soc/threat-intel` | REVIEWERS | Sign-in attempts (filterable) and the SAMPLE threat-intel list |
+| `POST /api/soc/simulate/brute-force` | security, admin | Insert a synthetic brute-force burst and run the rules |
+| `POST /api/phishing/analyze` | REVIEWERS | Phishing probability + top signals for a URL or e-mail |
+| `GET /api/security/self-check/targets` · `POST /api/security/self-check` | REVIEWERS | Header / TLS / cookie self-check |
+| `GET /api/incidents/:id/playbook` · `PUT /api/incidents/:id/playbook/:key` | STAFF / REVIEWERS | Playbook steps (audited) |
+| `PATCH /api/incidents/:id/breach` | REVIEWERS | Personal-data breach flag, NPC notified time |
 | `GET /api/consents/me` · `GET /api/consents/me/history` · `PUT /api/consents/me/:purpose` | customer | View and change own consents |
 | `GET /api/requests/me` · `POST /api/requests` | customer | Own data-rights requests |
 | `GET /api/requests` · `PATCH /api/requests/:id` | dpo, admin | Handle data-rights requests |
@@ -348,19 +495,19 @@ are defined in `backend/src/lib/auth.ts`:
 | `POST /api/access-logs/simulate` | REVIEWERS | Insert 1–20 synthetic events and score them now |
 | `GET /api/audit-logs` · `GET /api/audit-logs/verify` | dpo, security, admin | Audit log and hash-chain verification |
 | `GET /api/users/staff` | REVIEWERS | Staff list (for assignment) |
-| `GET /api/users` · `POST /api/users` · `PATCH /api/users/:id` | admin | User and role management |
+| `GET /api/users` · `POST /api/users` · `PATCH /api/users/:id` · `POST /api/users/:id/unlock` · `DELETE /api/users/:id` | admin | User and role management (staff creation, unlock, delete) |
 | `GET /api/dashboard/kpis` · `GET /api/risk/forecast` · `GET /api/metrics` | STAFF | Dashboard KPIs, risk trend, model metrics |
 | `POST /api/ml/classify` | STAFF | Classify an incident text |
 | `POST /api/assistant/ask` | any signed-in user | Privacy assistant |
-| `GET/POST /api/cron/score` | `CRON_SECRET` bearer, or security/admin JWT | Score pending events and classify pending incidents |
+| `GET/POST /api/cron/score` | `CRON_SECRET` bearer, or security/admin session | Score pending events and classify pending incidents |
 
 The ML service (`ml-service/app/main.py`) is internal: `GET /health`, `POST /anomaly/score`,
 `POST /anomaly/explain`, `POST /incidents/classify`, `GET|POST /risk/forecast`, `POST /assistant/ask`,
-`GET /metrics`. Run it locally and open http://localhost:8000/docs for the interactive Swagger UI.
+`GET /metrics`, `POST /phishing/analyze`. Run it locally and open http://localhost:8000/docs for the interactive Swagger UI.
 
 ## Database schema
 
-Defined in `db/init.sql` (11 tables):
+Defined in `db/init.sql` (11 tables) plus `db/migrations/002_security.sql` (6 more tables, new columns):
 
 | Table | Holds |
 |---|---|
@@ -375,10 +522,21 @@ Defined in `db/init.sql` (11 tables):
 | `incident_actions` | Corrective actions per incident |
 | `audit_logs` | Hash-chained audit trail (a trigger blocks UPDATE and DELETE) |
 | `model_predictions` | Stored model outputs |
+| `sessions` | Server-side sessions (hashed id, user agent, masked IP, MFA flag, revoked time) |
+| `mfa_backup_codes` | SHA-256 of single-use backup codes |
+| `login_attempts` | Every sign-in attempt: e-mail, success, reason, masked IP, location, user agent, `synthetic` flag |
+| `security_alerts` | Rule hits with ATT&CK technique, severity, review status |
+| `threat_intel` | SAMPLE indicators (documentation IP ranges) |
+| `incident_playbook_steps` | Who completed which playbook step and when |
+
+Migration 002 also adds `users.mfa_enabled / mfa_secret_enc / mfa_last_step / failed_login_count / locked_until /
+password_changed_at` and `incidents.personal_data_breach / breach_discovered_at / npc_notified_at`. Migration 003
+loads 14 days of synthetic sign-in history and the sample threat intel; 004 removes the old demo logins.
+All migrations are additive and idempotent: no existing data is dropped.
 
 ## Security & privacy design
 
-- **Passwords and sessions:** passwords are hashed with bcrypt (`bcryptjs`, cost 10). Sessions use JWTs that expire after 8 h by default.
+- **Passwords and sessions:** bcrypt (cost 12), zxcvbn policy, server-side revocable sessions in an httpOnly cookie, CSRF tokens, lockout, optional TOTP MFA. Details in [Cybersecurity module](#cybersecurity-module).
 - **Access control:** RBAC is enforced on every route on the server. The UI hides links too, but that is only for convenience.
 - **Hash-chained audit log:** every mutating action writes an audit row (logins and failed logins included). Each row stores
   `hash = sha256(prev_hash + canonical_json(created_at, actor, action, entity, details))`.
@@ -391,6 +549,7 @@ Defined in `db/init.sql` (11 tables):
 - **PII masking:**
   - The request logger records only method, path and status (no bodies or query strings).
   - `safeLog()` masks emails (`j***@example.ph`), PH mobile numbers and JWTs.
+  - IP addresses are stored masked (IPv4 /24, IPv6 /48).
   - Audit `details` pass through the same masker, which also redacts keys such as `email`, `password` and `phone`.
 
 ## Ethical considerations
@@ -418,10 +577,10 @@ Defined in `db/init.sql` (11 tables):
 - **Static models:** Isolation Forest has a fixed contamination prior. Nothing retrains or detects drift yet.
 - **Simple trend analysis:** the trend is a linear fit, so it does not model seasonality.
 - **Small policy set:** the RAG corpus is 5 short documents, and the similarity thresholds were tuned by hand on a few questions.
-- **Auth is MVP-level:**
-  - no refresh tokens, MFA, password reset or rate limiting on login
-  - the JWT is stored in localStorage
-  - the SSE stream takes the token in the query string, because EventSource can't set headers
+- **Auth gaps:** no e-mail verification or password-reset e-mail (no free e-mail provider); a locked account's
+  423 response reveals that it exists; the per-IP limit uses masked IPs (a /24 shares one budget).
+- **CSP:** `style-src` still allows `'unsafe-inline'` for inline style attributes.
+- **Threat intel and geolocation are samples**, and the phishing models are trained on synthetic templates only.
 - **Audit chain limits:** the hash chain detects tampering but can't stop a DB superuser from rewriting the whole chain. Anchoring the latest hash outside the database would close that gap.
 - **Only partly fulfilled requests:** the data-rights workflow tracks status but doesn't export or delete data automatically.
 - **Weekday drift:** seed timestamps are shifted to look recent, so the stored `is_weekend` feature may not match the shifted calendar day.
@@ -432,9 +591,9 @@ Defined in `db/init.sql` (11 tables):
 
 - **Model work:** feedback-driven threshold tuning and periodic retraining. Per-employee baselines (peer-group models), and
   supervised models once enough reviewed alerts exist.
-- **Security:** MFA, rate limiting, refresh tokens in httpOnly cookies, and audit-hash anchoring to object storage or a timestamping service.
+- **Security:** e-mail verification and reset, WebAuthn passkeys, a real threat-intel feed and GeoIP, and audit-hash anchoring to object storage or a timestamping service.
 - **Data-rights automation:** generate access exports and run deletion or anonymization jobs.
-- **Workflows:** breach-notification support (NPC timelines checklist) and a DPO reporting export.
+- **Workflows:** a DPO reporting export and an NPC notification template.
 - **Testing:** unit and integration tests in CI (Jest for the API, pytest for ML, Playwright for the UI).
 - **Assistant:** a larger, versioned policy corpus with a proper retrieval evaluation set.
 
@@ -461,3 +620,14 @@ iptables to be switched to legacy mode in that sandbox; that is a property of th
   - audit verification, a customer consent toggle and an assistant answer
   - a customer being redirected away from `/admin`
 - **Full Docker run:** `docker compose up --build` brought up all 4 services. They became healthy and passed the same browser test.
+
+**Cybersecurity module (native stack: PostgreSQL 17, ML service, backend, `next start`).** Docker was not
+available on that machine, so the compose file was checked by parsing it and by applying
+init → seed → 002 → 003 → 004 to a fresh database (0 users afterwards). A scripted API run passed 43/43 checks:
+the old demo password is rejected; weak passwords are rejected; `ADMIN_EMAIL` sign-up becomes admin; the cookie is
+HttpOnly + SameSite=Strict; duplicate and synthetic-customer e-mails get 409; RBAC 401/403; missing CSRF and a
+foreign Origin get 403; admin creates staff but not customers; MFA setup/enable, login challenge, wrong and right
+codes; lockout on the 5th failure and unlock; sessions list and revoke-others; SOC overview; the simulated brute
+force raises a critical T1110.001 alert; threat intel; phishing scores; playbook tick; NPC deadline; audit chain
+valid; self-check. `npm run create-admin` was tested piped and in a pseudo-terminal (password not echoed), and
+`scripts/verify_live.py` passed 13/13 against the local stack. Screenshots were taken with Playwright at 1440 px.

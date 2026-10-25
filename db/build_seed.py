@@ -1,10 +1,13 @@
 """Build db/seed.sql from the synthetic CSVs in data/generated/.
 
-Run after `python data/generate.py`. Requires the `bcrypt` package.
-Seeds: demo users (one per role), customers, consents (+ initial history), recent
+Run after `python data/generate.py`. Standard library only.
+Seeds: customers, consents (+ initial history), recent
 access logs (unscored - the backend scoring job scores them via the ML service on
 startup, which also creates alerts), sample incidents (unclassified - classified by
 the same job) and a few data-rights requests.
+
+NO login accounts are seeded. Customers sign up on /signup; the first admin is created
+with ADMIN_EMAIL or `npm run create-admin` (see README).
 
 Access-log timestamps are made relative to the moment the seed is loaded (most recent
 synthetic day = "yesterday", Philippine time), so the dashboard looks current whenever
@@ -17,11 +20,8 @@ import csv
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import bcrypt
-
 ROOT = Path(__file__).resolve().parents[1]
 GEN = ROOT / "data" / "generated"
-DEMO_PASSWORD = "DemoPass123!"   # demo only - documented in README
 LOG_DAYS = 21                    # how many recent days of access logs to seed
 N_INCIDENTS = 28
 
@@ -63,15 +63,6 @@ def main():
                           for c in customers) + ";")
     out.append("SELECT setval('customers_id_seq', (SELECT max(id) FROM customers));")
 
-    h = bcrypt.hashpw(DEMO_PASSWORD.encode(), bcrypt.gensalt(10)).decode()
-    users = [("customer@dataguard.demo", customers[0]["full_name"], "customer", 1),
-             ("customer2@dataguard.demo", customers[1]["full_name"], "customer", 2),
-             ("dpo@dataguard.demo", "Dana Pascual (DPO)", "dpo", None),
-             ("security@dataguard.demo", "Sam Reyes (Security)", "security", None),
-             ("admin@dataguard.demo", "Alex Cruz (Admin)", "admin", None),
-             ("exec@dataguard.demo", "Erika Santos (Executive)", "executive", None)]
-    out.append("INSERT INTO users (email, password_hash, full_name, role, customer_id) VALUES")
-    out.append(",\n".join(f"({q(e)},{q(h)},{q(n)},{q(r)},{q(c)})" for e, n, r, c in users) + ";")
 
     cons = read("consents.csv")
     out.append("INSERT INTO consents (customer_id, purpose, granted, updated_at) VALUES")
@@ -106,14 +97,14 @@ def main():
     for i, r in enumerate(incs):
         title = _title(r["description"])
         days_ago = (N_INCIDENTS - i) % 30
-        vals.append(f"({q(title)},{q(r['description'])},{q(sev[i % len(sev)])},{q(st[i % len(st)])},3,"
-                    f"{'4' if i % 3 else 'NULL'},now() - interval '{days_ago} days')")
+        vals.append(f"({q(title)},{q(r['description'])},{q(sev[i % len(sev)])},{q(st[i % len(st)])},NULL,"
+                    f"NULL,now() - interval '{days_ago} days')")
     out.append("INSERT INTO incidents (title, description, severity, status, reported_by, assigned_to, reported_at) VALUES")
     out.append(",\n".join(vals) + ";")
     out.append("""INSERT INTO incident_actions (incident_id, action_type, content, completed, actor_id, created_at) VALUES
-(1,'note','Initial triage done; affected system identified.',false,3,now() - interval '20 days'),
-(1,'corrective_action','Reset credentials of affected account and enable MFA.',true,4,now() - interval '19 days'),
-(2,'corrective_action','Review export permissions for the reporting team.',false,3,now() - interval '10 days');""")
+(1,'note','Initial triage done; affected system identified.',false,NULL,now() - interval '20 days'),
+(1,'corrective_action','Reset credentials of affected account and enable MFA.',true,NULL,now() - interval '19 days'),
+(2,'corrective_action','Review export permissions for the reporting team.',false,NULL,now() - interval '10 days');""")
 
     out.append("""INSERT INTO data_requests (reference, customer_id, type, details, status, response, created_at, updated_at) VALUES
 ('DR-2026-0001',1,'access','Please send me a copy of all personal data you hold about me.','completed','Your data export was provided through the portal.',now() - interval '30 days',now() - interval '25 days'),
@@ -122,7 +113,7 @@ def main():
     out.append("UPDATE data_requests SET due_at = created_at + interval '21 days';")
     out.append("COMMIT;")
     (ROOT / "db" / "seed.sql").write_text("\n".join(out) + "\n", encoding="utf-8")
-    print(f"wrote db/seed.sql ({len(rows)} access logs, {len(incs)} incidents, {len(users)} users)")
+    print(f"wrote db/seed.sql ({len(rows)} access logs, {len(incs)} incidents, no login users)")
 
 
 if __name__ == "__main__":
